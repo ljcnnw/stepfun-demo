@@ -1,0 +1,138 @@
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.settings-panel {
+  background: #1f2937;
+  border-radius: 12px;
+  width: 340px;
+  padding: 0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #374151;
+  font-size: 16px;
+  font-weight: 600;
+  color: #f9fafb;
+}
+
+.settings-close {
+  background: none;
+  border: none;
+  color: #9ca3af;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+}
+
+.settings-close:hover {
+  color: #f9fafb;
+}
+
+.settings-body {
+  padding: 20px;
+}
+
+.settings-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: #e5e7eb;
+  margin-bottom: 6px;
+}
+
+.settings-desc {
+  font-size: 12px;
+  color: #6b7280;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+/* 音量 + 阈值可视化条 */
+.threshold-bar-wrap {
+  position: relative;
+  height: 8px;
+  background: #374151;
+  border-radius: 4px;
+  margin-bottom: 12px;
+  overflow: visible;
+}
+
+.threshold-bar-volume {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: #4ade80;
+  border-radius: 4px;
+  transition: width 80ms ease-out;
+  max-width: 100%;
+}
+
+/* 阈值指示线 */
+.threshold-bar-line {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 16px;
+  background: #f59e0b;
+  border-radius: 1px;
+  transform: translateX(-50%);
+}
+
+.threshold-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.threshold-slider {
+  flex: 1;
+  accent-color: #f59e0b;
+  cursor: pointer;
+}
+
+.threshold-value {
+  font-size: 13px;
+  color: #f59e0b;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+  text-align: right;
+}
+
+.threshold-reset {
+  background: none;
+  border: 1px solid #4b5563;
+  border-radius: 4px;
+  color: #9ca3af;
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.threshold-reset:hover {
+  border-color: #9ca3af;
+  color: #e5e7eb;
+}
+
+.settings-hint {
+  font-size: 11px;
+  color: #4b5563;
+  margin: 0;
+  line-height: 1.5;
+}
