@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useRef, useImperativeHandle, forwardRef } from 'react'
 import './SettingsPanel.css'
 
 interface Props {
@@ -6,12 +6,27 @@ interface Props {
   onClose: () => void
   threshold: number
   onThresholdChange: (val: number) => void
-  volume: number  // 当前实时音量（0~1），用于直观展示阈值位置
+  provider: 'sierra' | 'stepfun'
+  onProviderChange: (val: 'sierra' | 'stepfun') => void
 }
 
-export const SettingsPanel: React.FC<Props> = ({
-  open, onClose, threshold, onThresholdChange, volume
-}) => {
+export interface SettingsPanelHandle {
+  setVolume: (vol: number) => void
+}
+
+export const SettingsPanel = forwardRef<SettingsPanelHandle, Props>(({
+  open, onClose, threshold, onThresholdChange, provider, onProviderChange
+}, ref) => {
+  const volumeBarRef = useRef<HTMLDivElement | null>(null)
+
+  useImperativeHandle(ref, () => ({
+    setVolume(vol: number) {
+      if (volumeBarRef.current) {
+        volumeBarRef.current.style.width = `${vol * 100}%`
+      }
+    }
+  }))
+
   if (!open) return null
 
   return (
@@ -23,19 +38,29 @@ export const SettingsPanel: React.FC<Props> = ({
         </div>
 
         <div className="settings-body">
-          <label className="settings-label">麦克风音量阈值</label>
+          <label className="settings-label">AI 模型</label>
+          <div className="provider-row">
+            <button
+              className={`provider-btn ${provider === 'sierra' ? 'active' : ''}`}
+              onClick={() => onProviderChange('sierra')}
+            >Sierra</button>
+            <button
+              className={`provider-btn ${provider === 'stepfun' ? 'active' : ''}`}
+              onClick={() => onProviderChange('stepfun')}
+            >Stepfun</button>
+          </div>
+
+          <label className="settings-label" style={{ marginTop: 16 }}>麦克风音量阈值</label>
           <p className="settings-desc">
             低于此阈值的音频帧会替换为静音发送，可过滤环境噪音同时保持 VAD 正常工作。
           </p>
 
-          {/* 实时音量 + 阈值指示条 */}
           <div className="threshold-bar-wrap">
-            {/* 当前音量填充 */}
             <div
               className="threshold-bar-volume"
-              style={{ width: `${volume * 100}%` }}
+              ref={volumeBarRef}
+              style={{ width: '0%' }}
             />
-            {/* 阈值指示线 */}
             <div
               className="threshold-bar-line"
               style={{ left: `${threshold * 100}%` }}
@@ -67,4 +92,4 @@ export const SettingsPanel: React.FC<Props> = ({
       </div>
     </div>
   )
-}
+})

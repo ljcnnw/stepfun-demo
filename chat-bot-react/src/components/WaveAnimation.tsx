@@ -1,30 +1,39 @@
-import React from 'react'
+import React, { useRef, useImperativeHandle, forwardRef } from 'react'
 import './WaveAnimation.css'
 
 interface Props {
   active: boolean
-  volume?: number  // 0~1，有值时用实时音量驱动，否则用 CSS 动画
+}
+
+export interface WaveAnimationHandle {
+  setVolume: (vol: number) => void
 }
 
 const BAR_COUNT = 5
-// 每根柱子对音量的响应灵敏度，中间柱子最高
 const SENSITIVITY = [0.6, 0.8, 1.0, 0.8, 0.6]
 
-export const WaveAnimation: React.FC<Props> = ({ active, volume }) => {
-  const hasVolume = active && volume !== undefined
+export const WaveAnimation = forwardRef<WaveAnimationHandle, Props>(({ active }, ref) => {
+  const barRefs = useRef<(HTMLDivElement | null)[]>([])
+
+  useImperativeHandle(ref, () => ({
+    setVolume(vol: number) {
+      barRefs.current.forEach((bar, i) => {
+        if (!bar) return
+        bar.style.height = vol > 0 ? `${8 + vol * SENSITIVITY[i] * 32}px` : '8px'
+      })
+    }
+  }))
 
   return (
     <div className={`wave-container ${active ? 'wave-active' : 'wave-idle'}`}>
-      {Array.from({ length: BAR_COUNT }).map((_, i) => {
-        const style: React.CSSProperties = hasVolume
-          ? {
-              height: `${8 + volume * SENSITIVITY[i] * 32}px`,
-              transition: 'height 80ms ease-out',
-              animationName: 'none',
-            }
-          : { animationDelay: `${i * 0.1}s` }
-        return <div key={i} className="wave-bar" style={style} />
-      })}
+      {Array.from({ length: BAR_COUNT }).map((_, i) => (
+        <div
+          key={i}
+          className="wave-bar"
+          ref={el => { barRefs.current[i] = el }}
+          style={{ animationDelay: `${i * 0.1}s` }}
+        />
+      ))}
     </div>
   )
-}
+})

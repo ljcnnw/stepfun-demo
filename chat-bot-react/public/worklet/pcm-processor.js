@@ -26,10 +26,10 @@ class PcmProcessor extends AudioWorkletProcessor {
     while (this._buffer.length >= this._bufferSize) {
       const chunk = this._buffer.splice(0, this._bufferSize)
 
-      // 计算当前帧的 RMS 音量，乘以 4 放大（与 UI 音量显示的计算方式保持一致）
+      // 计算当前帧的 RMS 音量，乘以 2 放大（与 UI 音量显示的计算方式保持一致）
       let sum = 0
       for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i]
-      const rms = Math.sqrt(sum / chunk.length) * 4
+      const rms = Math.sqrt(sum / chunk.length) * 2
 
       const int16 = new Int16Array(chunk.length)
 

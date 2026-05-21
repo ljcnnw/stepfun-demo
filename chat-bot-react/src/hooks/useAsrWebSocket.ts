@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback } from 'react'
 import type { ServerEvent, ChatMessage } from '../types/asr'
 
-// const WS_URL = 'wss://dec-entrepreneurs-citizen-primary.trycloudflare.com/asr'
+// const WS_URL = 'wss://invited-mileage-tribal-especially.trycloudflare.com/asr'
 const WS_URL = 'ws://localhost:8080/asr'
 
 interface UseAsrWebSocketOptions {
@@ -216,6 +216,13 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     }
   }, [])
 
+  // 通知后端切换 LLM provider
+  const setProvider = useCallback((provider: 'sierra' | 'stepfun') => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'llm.provider', provider }))
+    }
+  }, [])
+
   // 重置对话状态（开始新通话时调用）
   const reset = useCallback(() => {
     setMessages([])
@@ -224,5 +231,5 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     pendingInterruptRef.current = false
   }, [])
 
-  return { connect, disconnect, sendAudio, messages, connected, reset, setIsSpeaking }
+  return { connect, disconnect, sendAudio, setProvider, messages, connected, reset, setIsSpeaking }
 }

@@ -82,13 +82,14 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
             @Override
             public void onUserSpeechCompleted(String transcript) {
-                // ASR 识别出用户说完一句话，触发 LLM 推理
                 log.info("【用户说话完成】识别结果：{}，sessionId={}", transcript, session.getId());
-                // 启动 LLM 流式推理，携带 sessionId 以关联对话历史
+                // 取消上一轮未完成的 LLM，避免多轮并发时互相干扰
+                AtomicBoolean prev = llmCancelled.remove(session.getId());
+                if (prev != null) prev.set(true);
+
                 AtomicBoolean cancelled = llmService.streamChat(
                         transcript, session.getId(), session,
                         tts -> {
-                            // TTS 连接创建后加入列表，供后续打断使用
                             ttsClients.get(session.getId()).add(tts);
                             isPlaying.get(session.getId()).set(true);
                         });
@@ -98,6 +99,12 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         asr.connect();
         asrClients.put(session.getId(), asr);
         log.info("【ASR 连接】已向 Stepfun ASR 发起连接，sessionId={}", session.getId());
+
+        // 连接建立后直接播放开场白
+        llmService.playGreeting(session.getId(), session, tts -> {
+            ttsClients.get(session.getId()).add(tts);
+            isPlaying.get(session.getId()).set(true);
+        });
     }
 
     /**
@@ -126,13 +133,21 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
             String type = json.getString("type");
 
             if ("tts.interrupt".equals(type)) {
-                // 前端检测到用户开始说话（VAD），请求打断当前 TTS 播放
                 AtomicBoolean playing = isPlaying.get(session.getId());
                 if (playing != null && playing.get()) {
                     log.info("【VAD 打断】前端触发打断，正在执行，sessionId={}", session.getId());
                     interruptAll(session);
                 } else {
                     log.info("【VAD 打断】忽略打断请求（当前未在播放），sessionId={}", session.getId());
+                }
+                return;
+            }
+
+            if ("llm.provider".equals(type)) {
+                String provider = json.getString("provider");
+                if ("sierra".equals(provider) || "stepfun".equals(provider)) {
+                    llmService.setProvider(session.getId(), provider);
+                    log.info("【Provider 切换】sessionId={}，provider={}", session.getId(), provider);
                 }
                 return;
             }
@@ -230,8 +245,8 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         StepfunWsClient asr = asrClients.remove(sessionId);
         if (asr != null && !asr.isClosed()) asr.close();
 
-        // 清除该 session 的对话历史
-        llmService.clearHistory(sessionId);
+        // 清除该 session 的 Sierra state
+        llmService.clearState(sessionId);
 
         log.info("【资源清理】session 资源已全部释放，sessionId={}", sessionId);
     }

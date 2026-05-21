@@ -136,3 +136,33 @@
   margin: 0;
   line-height: 1.5;
 }
+
+.provider-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.provider-btn {
+  flex: 1;
+  padding: 8px 0;
+  border-radius: 6px;
+  border: 1px solid #4b5563;
+  background: none;
+  color: #9ca3af;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.provider-btn:hover {
+  border-color: #9ca3af;
+  color: #e5e7eb;
+}
+
+.provider-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+  font-weight: 500;
+}

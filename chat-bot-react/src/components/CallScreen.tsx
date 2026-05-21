@@ -1,14 +1,16 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { WaveAnimation } from './WaveAnimation'
+import type { WaveAnimationHandle } from './WaveAnimation'
 import { TranscriptPanel } from './TranscriptPanel'
 import { SettingsPanel } from './SettingsPanel'
+import type { SettingsPanelHandle } from './SettingsPanel'
 import { useAsrWebSocket } from '../hooks/useAsrWebSocket'
 import { useAudioCapture } from '../hooks/useAudioCapture'
 import { useTtsPlayer } from '../hooks/useTtsPlayer'
 import './CallScreen.css'
 
 const THRESHOLD_KEY = 'mic_threshold'
-const DEFAULT_THRESHOLD = 0
+const DEFAULT_THRESHOLD = 0.02
 
 type CallState = 'idle' | 'listening' | 'speaking' | 'error'
 
@@ -16,17 +18,17 @@ export const CallScreen: React.FC = () => {
   const [callState, setCallState] = useState<CallState>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [duration, setDuration] = useState(0)
-  const [volume, setVolume] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // 从 localStorage 恢复上次保存的阈值，没有则默认 0（不过滤）
+  const [provider, setProviderState] = useState<'sierra' | 'stepfun'>('sierra')
   const [threshold, setThresholdState] = useState<number>(() => {
     const saved = localStorage.getItem(THRESHOLD_KEY)
     const val = saved !== null ? parseFloat(saved) : DEFAULT_THRESHOLD
-    // 防止旧版本存了过高的值导致音频全被过滤
     return isNaN(val) ? DEFAULT_THRESHOLD : val
   })
   const timerRef = useRef<number | null>(null)
   const setIsSpeakingRef = useRef<((val: boolean) => void) | null>(null)
+  const waveRef = useRef<WaveAnimationHandle | null>(null)
+  const settingsPanelRef = useRef<SettingsPanelHandle | null>(null)
 
   const { playChunk, interrupt, dispose } = useTtsPlayer()
 
@@ -46,7 +48,7 @@ export const CallScreen: React.FC = () => {
     setCallState('listening')
   }, [])
 
-  const { connect, disconnect, sendAudio, messages, reset, setIsSpeaking } = useAsrWebSocket({
+  const { connect, disconnect, sendAudio, setProvider, messages, reset, setIsSpeaking } = useAsrWebSocket({
     onVadSpeechStarted: handleVadSpeechStarted,
     onTtsAudioDelta: handleTtsAudioDelta,
     onTtsAudioDone: handleTtsAudioDone,
@@ -54,17 +56,26 @@ export const CallScreen: React.FC = () => {
 
   setIsSpeakingRef.current = setIsSpeaking
 
+  const handleVolume = useCallback((vol: number) => {
+    waveRef.current?.setVolume(vol >= threshold ? vol : 0)
+    settingsPanelRef.current?.setVolume(vol)
+  }, [threshold])
+
   const { start: startCapture, stop: stopCapture, setThreshold } = useAudioCapture({
     onFrame: sendAudio,
-    onVolume: setVolume,
+    onVolume: handleVolume,
   })
 
-  // 阈值变化时同步到 Worklet 并持久化
   const handleThresholdChange = useCallback((val: number) => {
     setThresholdState(val)
     setThreshold(val)
     localStorage.setItem(THRESHOLD_KEY, String(val))
   }, [setThreshold])
+
+  const handleProviderChange = useCallback((val: 'sierra' | 'stepfun') => {
+    setProviderState(val)
+    setProvider(val)
+  }, [setProvider])
 
   const startCall = useCallback(async () => {
     setErrorMsg('')
@@ -72,7 +83,6 @@ export const CallScreen: React.FC = () => {
     try {
       connect()
       await startCapture()
-      // 采集启动后立即应用当前阈值
       setThreshold(threshold)
       setCallState('listening')
       setDuration(0)
@@ -89,7 +99,8 @@ export const CallScreen: React.FC = () => {
     stopCapture()
     disconnect()
     setCallState('idle')
-    setVolume(0)
+    waveRef.current?.setVolume(0)
+    settingsPanelRef.current?.setVolume(0)
     if (timerRef.current !== null) {
       clearInterval(timerRef.current)
       timerRef.current = null
@@ -129,7 +140,7 @@ export const CallScreen: React.FC = () => {
       <TranscriptPanel messages={messages} isSpeaking={callState === 'speaking'} />
 
       <div className="call-footer">
-        <WaveAnimation active={callState === 'listening'} volume={volume} />
+        <WaveAnimation ref={waveRef} active={callState === 'listening'} />
 
         {errorMsg && <p className="error-msg">{errorMsg}</p>}
 
@@ -145,11 +156,13 @@ export const CallScreen: React.FC = () => {
       </div>
 
       <SettingsPanel
+        ref={settingsPanelRef}
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         threshold={threshold}
         onThresholdChange={handleThresholdChange}
-        volume={volume}
+        provider={provider}
+        onProviderChange={handleProviderChange}
       />
     </div>
   )

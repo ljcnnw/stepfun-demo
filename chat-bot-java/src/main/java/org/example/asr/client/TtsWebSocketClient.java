@@ -168,9 +168,13 @@ public class TtsWebSocketClient extends WebSocketClient {
         JSONObject data = new JSONObject();
         data.put("session_id", ttsSessionId);
         data.put("voice_id", voiceId);
-        data.put("response_format", "pcm");   // 返回原始 PCM，前端直接播放
+        data.put("response_format", "pcm");
         data.put("sample_rate", 16000);
-        data.put("mode", "sentence");          // 按句子返回音频，便于流式播放
+        data.put("mode", "sentence");
+
+        JSONObject voiceLabel = new JSONObject();
+        voiceLabel.put("language", "粤语");
+        data.put("voice_label", voiceLabel);
 
         JSONObject msg = new JSONObject();
         msg.put("type", "tts.create");

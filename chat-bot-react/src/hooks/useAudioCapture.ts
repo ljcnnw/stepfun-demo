@@ -38,7 +38,7 @@ export function useAudioCapture({ onFrame, onVolume }: UseAudioCaptureOptions) {
     audioContextRef.current = ctx
 
     // 加载 AudioWorklet 处理器（Float32 → Int16 PCM，每 1600 帧触发一次）
-    await ctx.audioWorklet.addModule('/worklet/pcm-processor.js')
+    await ctx.audioWorklet.addModule('worklet/pcm-processor.js')
 
     const source = ctx.createMediaStreamSource(stream)
     const workletNode = new AudioWorkletNode(ctx, 'pcm-processor')
@@ -66,7 +66,7 @@ export function useAudioCapture({ onFrame, onVolume }: UseAudioCaptureOptions) {
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i]
         const rms = Math.sqrt(sum / dataArray.length)
         // 放大 4 倍并限制到 0~1（人声 RMS 通常在 0.01~0.3 之间，放大后更直观）
-        onVolume(Math.min(rms * 4, 1))
+        onVolume(Math.min(rms * 2, 1))
         animFrameRef.current = requestAnimationFrame(tick)
       }
       animFrameRef.current = requestAnimationFrame(tick)
