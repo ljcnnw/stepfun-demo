@@ -81,7 +81,7 @@ export const CallScreen: React.FC = () => {
     setErrorMsg('')
     reset()
     try {
-      connect()
+      connect(provider)
       await startCapture()
       setThreshold(threshold)
       setCallState('listening')

@@ -172,10 +172,6 @@ public class TtsWebSocketClient extends WebSocketClient {
         data.put("sample_rate", 16000);
         data.put("mode", "sentence");
 
-        JSONObject voiceLabel = new JSONObject();
-        voiceLabel.put("language", "粤语");
-        data.put("voice_label", voiceLabel);
-
         JSONObject msg = new JSONObject();
         msg.put("type", "tts.create");
         msg.put("data", data);

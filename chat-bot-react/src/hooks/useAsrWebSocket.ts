@@ -35,7 +35,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     isSpeakingRef.current = val
   }, [])
 
-  const connect = useCallback(() => {
+  const connect = useCallback((initialProvider: 'sierra' | 'stepfun' = 'sierra') => {
     const ws = new WebSocket(WS_URL)
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
@@ -43,6 +43,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     ws.onopen = () => {
       console.log('[WebSocket] 已连接后端')
       setConnected(true)
+      ws.send(JSON.stringify({ type: 'llm.provider', provider: initialProvider }))
     }
 
     ws.onmessage = (e: MessageEvent<string>) => {
