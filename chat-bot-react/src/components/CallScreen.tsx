@@ -91,7 +91,7 @@ export const CallScreen: React.FC = () => {
       setErrorMsg('无法获取麦克风权限，请在浏览器中允许麦克风访问')
       setCallState('error')
     }
-  }, [connect, startCapture, reset, setThreshold, threshold])
+  }, [connect, startCapture, reset, setThreshold, threshold, provider])
 
   const endCall = useCallback(() => {
     interrupt()
