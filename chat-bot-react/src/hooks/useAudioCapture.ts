@@ -1,5 +1,7 @@
 import { useRef, useCallback } from 'react'
 
+const MIC_GAIN = 3
+
 interface UseAudioCaptureOptions {
   onFrame: (pcmBuffer: ArrayBuffer) => void
   onVolume?: (volume: number) => void  // 0~1 的 RMS 音量，用于驱动音量动画
@@ -66,7 +68,7 @@ export function useAudioCapture({ onFrame, onVolume }: UseAudioCaptureOptions) {
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i] * dataArray[i]
         const rms = Math.sqrt(sum / dataArray.length)
         // 放大 4 倍并限制到 0~1（人声 RMS 通常在 0.01~0.3 之间，放大后更直观）
-        onVolume(Math.min(rms * 2, 1))
+        onVolume(Math.min(rms * MIC_GAIN, 1))
         animFrameRef.current = requestAnimationFrame(tick)
       }
       animFrameRef.current = requestAnimationFrame(tick)

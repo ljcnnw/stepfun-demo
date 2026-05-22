@@ -212,10 +212,9 @@ public class LlmService {
             safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
             log.info("【Sierra 推理完成】sessionId={}", sessionId);
 
-            if (!cancelled.get() && newState != null) {
+            if (newState != null) {
                 sierraStateMap.put(sessionId, newState);
-            } else if (cancelled.get()) {
-                log.info("【Sierra state 跳过】本轮被打断，sessionId={}", sessionId);
+                if (cancelled.get()) log.info("【Sierra state 保存（打断）】sessionId={}", sessionId);
             }
         } catch (Exception e) {
             if (!cancelled.get()) log.error("【Sierra 错误】sessionId={}", sessionId, e);

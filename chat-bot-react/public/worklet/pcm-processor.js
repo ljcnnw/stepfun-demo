@@ -1,4 +1,6 @@
 // AudioWorklet 处理器：将 Float32 PCM 转为 Int16 PCM，并按音量阈值过滤后发送到主线程
+const MIC_GAIN = 3
+
 class PcmProcessor extends AudioWorkletProcessor {
   constructor() {
     super()
@@ -29,7 +31,7 @@ class PcmProcessor extends AudioWorkletProcessor {
       // 计算当前帧的 RMS 音量，乘以 2 放大（与 UI 音量显示的计算方式保持一致）
       let sum = 0
       for (let i = 0; i < chunk.length; i++) sum += chunk[i] * chunk[i]
-      const rms = Math.sqrt(sum / chunk.length) * 2
+      const rms = Math.sqrt(sum / chunk.length) * MIC_GAIN
 
       const int16 = new Int16Array(chunk.length)
 
