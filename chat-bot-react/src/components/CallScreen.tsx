@@ -20,6 +20,7 @@ export const CallScreen: React.FC = () => {
   const [duration, setDuration] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [provider, setProviderState] = useState<'sierra' | 'stepfun'>('sierra')
+  const [asrProvider, setAsrProviderState] = useState<'stepfun' | 'fano'>('stepfun')
   const [threshold, setThresholdState] = useState<number>(() => {
     const saved = localStorage.getItem(THRESHOLD_KEY)
     const val = saved !== null ? parseFloat(saved) : DEFAULT_THRESHOLD
@@ -48,7 +49,7 @@ export const CallScreen: React.FC = () => {
     setCallState('listening')
   }, [])
 
-  const { connect, disconnect, sendAudio, setProvider, messages, reset, setIsSpeaking } = useAsrWebSocket({
+  const { connect, disconnect, sendAudio, setProvider, setAsrProvider, messages, reset, setIsSpeaking } = useAsrWebSocket({
     onVadSpeechStarted: handleVadSpeechStarted,
     onTtsAudioDelta: handleTtsAudioDelta,
     onTtsAudioDone: handleTtsAudioDone,
@@ -77,11 +78,16 @@ export const CallScreen: React.FC = () => {
     setProvider(val)
   }, [setProvider])
 
+  const handleAsrProviderChange = useCallback((val: 'stepfun' | 'fano') => {
+    setAsrProviderState(val)
+    setAsrProvider(val)
+  }, [setAsrProvider])
+
   const startCall = useCallback(async () => {
     setErrorMsg('')
     reset()
     try {
-      connect(provider)
+      connect(provider, asrProvider)
       await startCapture()
       setThreshold(threshold)
       setCallState('listening')
@@ -91,7 +97,7 @@ export const CallScreen: React.FC = () => {
       setErrorMsg('无法获取麦克风权限，请在浏览器中允许麦克风访问')
       setCallState('error')
     }
-  }, [connect, startCapture, reset, setThreshold, threshold, provider])
+  }, [connect, startCapture, reset, setThreshold, threshold, provider, asrProvider])
 
   const endCall = useCallback(() => {
     interrupt()
@@ -163,6 +169,8 @@ export const CallScreen: React.FC = () => {
         onThresholdChange={handleThresholdChange}
         provider={provider}
         onProviderChange={handleProviderChange}
+        asrProvider={asrProvider}
+        onAsrProviderChange={handleAsrProviderChange}
       />
     </div>
   )

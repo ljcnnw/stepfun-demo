@@ -8,6 +8,8 @@ interface Props {
   onThresholdChange: (val: number) => void
   provider: 'sierra' | 'stepfun'
   onProviderChange: (val: 'sierra' | 'stepfun') => void
+  asrProvider: 'stepfun' | 'fano'
+  onAsrProviderChange: (val: 'stepfun' | 'fano') => void
 }
 
 export interface SettingsPanelHandle {
@@ -15,7 +17,8 @@ export interface SettingsPanelHandle {
 }
 
 export const SettingsPanel = forwardRef<SettingsPanelHandle, Props>(({
-  open, onClose, threshold, onThresholdChange, provider, onProviderChange
+  open, onClose, threshold, onThresholdChange, provider, onProviderChange,
+  asrProvider, onAsrProviderChange
 }, ref) => {
   const volumeBarRef = useRef<HTMLDivElement | null>(null)
 
@@ -48,6 +51,18 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, Props>(({
               className={`provider-btn ${provider === 'stepfun' ? 'active' : ''}`}
               onClick={() => onProviderChange('stepfun')}
             >Stepfun</button>
+          </div>
+
+          <label className="settings-label" style={{ marginTop: 16 }}>语音识别（ASR）</label>
+          <div className="provider-row">
+            <button
+              className={`provider-btn ${asrProvider === 'stepfun' ? 'active' : ''}`}
+              onClick={() => onAsrProviderChange('stepfun')}
+            >Stepfun</button>
+            <button
+              className={`provider-btn ${asrProvider === 'fano' ? 'active' : ''}`}
+              onClick={() => onAsrProviderChange('fano')}
+            >FANO</button>
           </div>
 
           <label className="settings-label" style={{ marginTop: 16 }}>麦克风音量阈值</label>

@@ -35,7 +35,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     isSpeakingRef.current = val
   }, [])
 
-  const connect = useCallback((initialProvider: 'sierra' | 'stepfun' = 'sierra') => {
+  const connect = useCallback((initialProvider: 'sierra' | 'stepfun' = 'sierra', initialAsrProvider: 'stepfun' | 'fano' = 'stepfun') => {
     const ws = new WebSocket(WS_URL)
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
@@ -44,6 +44,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
       console.log('[WebSocket] 已连接后端')
       setConnected(true)
       ws.send(JSON.stringify({ type: 'llm.provider', provider: initialProvider }))
+      ws.send(JSON.stringify({ type: 'asr.provider', provider: initialAsrProvider }))
     }
 
     ws.onmessage = (e: MessageEvent<string>) => {
@@ -217,6 +218,13 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     }
   }, [])
 
+  // 通知后端切换 ASR provider
+  const setAsrProvider = useCallback((provider: 'stepfun' | 'fano') => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'asr.provider', provider }))
+    }
+  }, [])
+
   // 通知后端切换 LLM provider
   const setProvider = useCallback((provider: 'sierra' | 'stepfun') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -232,5 +240,5 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     pendingInterruptRef.current = false
   }, [])
 
-  return { connect, disconnect, sendAudio, setProvider, messages, connected, reset, setIsSpeaking }
+  return { connect, disconnect, sendAudio, setProvider, setAsrProvider, messages, connected, reset, setIsSpeaking }
 }
