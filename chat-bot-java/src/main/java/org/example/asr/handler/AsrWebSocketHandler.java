@@ -1,6 +1,7 @@
 package org.example.asr.handler;
 
 import com.alibaba.fastjson2.JSONObject;
+import org.example.asr.client.AliyunAsrClient;
 import org.example.asr.client.FanoAsrClient;
 import org.example.asr.client.StepfunWsClient;
 import org.example.asr.client.TtsWebSocketClient;
@@ -32,14 +33,10 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AsrWebSocketHandler.class);
 
-    // 本地 VAD 参数
-    // 连续 8 帧（800ms）RMS 低于阈值则判定说话结束
+    // FANO 本地 VAD 参数
     private static final int VAD_SILENCE_FRAMES = 8;
-    // 连续 2 帧（200ms）RMS 超过阈值则判定说话开始
     private static final int VAD_SPEECH_FRAMES = 2;
-    // RMS 阈值（与前端 worklet 的 MIC_GAIN=3 对应，原始 RMS 约 0.01 即触发）
     private static final double VAD_RMS_THRESHOLD = 0.015;
-    // 最大缓冲 30 秒（16kHz, 16bit = 32000 bytes/s）
     private static final int MAX_BUFFER_BYTES = 32000 * 30;
 
     @Value("${stepfun.api.key}")
@@ -54,17 +51,22 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     @Value("${fano.asr.token}")
     private String fanoAsrToken;
 
+    @Value("${aliyun.asr.url}")
+    private String aliyunAsrUrl;
+
+    @Value("${aliyun.asr.api-key}")
+    private String aliyunAsrApiKey;
+
     @Autowired
     private LlmService llmService;
 
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
     private final Map<String, StepfunWsClient> asrClients = new ConcurrentHashMap<>();
+    private final Map<String, AliyunAsrClient> aliyunAsrClients = new ConcurrentHashMap<>();
     private final Map<String, List<TtsWebSocketClient>> ttsClients = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> llmCancelled = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> isPlaying = new ConcurrentHashMap<>();
-
-    // per-session ASR provider（stepfun / fano）
     private final Map<String, String> asrProviderMap = new ConcurrentHashMap<>();
 
     // FANO 本地 VAD 状态
@@ -89,9 +91,8 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         });
     }
 
-    private void connectStepfunAsr(WebSocketSession session) throws Exception {
-        StepfunWsClient asr = new StepfunWsClient(new URI(asrUrl), apiKey, session);
-        asr.setListener(new StepfunWsClient.AsrEventListener() {
+    private StepfunWsClient.AsrEventListener buildListener(WebSocketSession session) {
+        return new StepfunWsClient.AsrEventListener() {
             @Override
             public void onSpeechConfirmed() {
                 AtomicBoolean playing = isPlaying.get(session.getId());
@@ -108,10 +109,23 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                 log.info("【用户说话完成】识别结果：{}，sessionId={}", transcript, session.getId());
                 triggerLlm(session, transcript);
             }
-        });
+        };
+    }
+
+    private void connectStepfunAsr(WebSocketSession session) throws Exception {
+        StepfunWsClient asr = new StepfunWsClient(new URI(asrUrl), apiKey, session);
+        asr.setListener(buildListener(session));
         asr.connect();
         asrClients.put(session.getId(), asr);
         log.info("【ASR 连接】已向 Stepfun ASR 发起连接，sessionId={}", session.getId());
+    }
+
+    private void connectAliyunAsr(WebSocketSession session) throws Exception {
+        AliyunAsrClient asr = new AliyunAsrClient(aliyunAsrUrl, aliyunAsrApiKey, session);
+        asr.setListener(buildListener(session));
+        asr.connect();
+        aliyunAsrClients.put(session.getId(), asr);
+        log.info("【ASR 连接】已向阿里云 ASR 发起连接，sessionId={}", session.getId());
     }
 
     private void initFanoVadState(String sessionId) {
@@ -130,19 +144,17 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         String provider = asrProviderMap.getOrDefault(session.getId(), "stepfun");
         if ("fano".equals(provider)) {
             handleFanoAudioFrame(session, pcmBytes);
+        } else if ("aliyun".equals(provider)) {
+            AliyunAsrClient asr = aliyunAsrClients.get(session.getId());
+            if (asr != null) asr.sendAudioFrame(pcmBytes);
         } else {
             StepfunWsClient asr = asrClients.get(session.getId());
             if (asr != null) asr.sendAudioFrame(pcmBytes);
         }
     }
 
-    /**
-     * 本地 VAD 处理：累积音频帧，检测说话开始/结束，结束后调用 FANO 识别。
-     * pcmBytes 为 Int16 PCM，每帧 100ms（1600 采样 = 3200 bytes）。
-     */
     private void handleFanoAudioFrame(WebSocketSession session, byte[] pcmBytes) {
         String sessionId = session.getId();
-
         double rms = calcRms(pcmBytes);
         boolean isSpeech = rms >= VAD_RMS_THRESHOLD;
 
@@ -150,7 +162,6 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         if (speaking == null) return;
 
         if (!speaking.get()) {
-            // 等待说话开始
             if (isSpeech) {
                 int cnt = fanoSpeechFrames.merge(sessionId, 1, Integer::sum);
                 if (cnt >= VAD_SPEECH_FRAMES) {
@@ -158,7 +169,6 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                     fanoSilenceFrames.put(sessionId, 0);
                     fanoSpeechFrames.put(sessionId, 0);
                     log.info("【FANO VAD】检测到说话开始，sessionId={}", sessionId);
-                    // 打断当前 TTS（如果在播放）
                     AtomicBoolean playing = isPlaying.get(sessionId);
                     if (playing != null && playing.get()) interruptAll(session);
                 }
@@ -166,17 +176,14 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                 fanoSpeechFrames.put(sessionId, 0);
             }
         } else {
-            // 说话中，累积音频
             List<byte[]> buf = fanoAudioBuffer.get(sessionId);
             if (buf != null) {
                 int totalBytes = buf.stream().mapToInt(b -> b.length).sum();
                 if (totalBytes < MAX_BUFFER_BYTES) buf.add(pcmBytes);
             }
-
             if (!isSpeech) {
                 int cnt = fanoSilenceFrames.merge(sessionId, 1, Integer::sum);
                 if (cnt >= VAD_SILENCE_FRAMES) {
-                    // 说话结束，取出缓冲发给 FANO
                     speaking.set(false);
                     fanoSilenceFrames.put(sessionId, 0);
                     List<byte[]> frames = fanoAudioBuffer.get(sessionId);
@@ -193,7 +200,6 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     private void submitFanoRecognize(WebSocketSession session, List<byte[]> frames) {
         executor.submit(() -> {
             try {
-                // 合并所有帧为一个字节数组
                 int total = frames.stream().mapToInt(b -> b.length).sum();
                 byte[] allPcm = new byte[total];
                 int offset = 0;
@@ -201,14 +207,12 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                     System.arraycopy(frame, 0, allPcm, offset, frame.length);
                     offset += frame.length;
                 }
-
                 FanoAsrClient fano = new FanoAsrClient(fanoAsrUrl, fanoAsrToken);
                 String transcript = fano.recognize(allPcm);
                 if (transcript == null || transcript.trim().isEmpty()) {
                     log.info("【FANO ASR】识别结果为空，跳过，sessionId={}", session.getId());
                     return;
                 }
-                // 模拟发送前端转录完成事件
                 if (session.isOpen()) {
                     JSONObject msg = new JSONObject();
                     msg.put("type", "conversation.item.input_audio_transcription.completed");
@@ -228,7 +232,6 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     private void triggerLlm(WebSocketSession session, String transcript) {
         AtomicBoolean prev = llmCancelled.remove(session.getId());
         if (prev != null) prev.set(true);
-
         AtomicBoolean cancelled = llmService.streamChat(
                 transcript, session.getId(), session,
                 tts -> {
@@ -266,12 +269,24 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
             if ("asr.provider".equals(type)) {
                 String provider = json.getString("provider");
-                if ("stepfun".equals(provider) || "fano".equals(provider)) {
-                    asrProviderMap.put(session.getId(), provider);
-                    log.info("【ASR Provider 切换】sessionId={}，provider={}", session.getId(), provider);
-                    // 切换到 fano 时重置本地 VAD 状态
+                if ("stepfun".equals(provider) || "fano".equals(provider) || "aliyun".equals(provider)) {
+                    String prev = asrProviderMap.put(session.getId(), provider);
+                    log.info("【ASR Provider 切换】sessionId={}，{} -> {}", session.getId(), prev, provider);
                     if ("fano".equals(provider)) {
                         initFanoVadState(session.getId());
+                    }
+                    if ("aliyun".equals(provider)) {
+                        // 关闭旧连接，新建阿里云 ASR 连接
+                        AliyunAsrClient old = aliyunAsrClients.remove(session.getId());
+                        if (old != null && !old.isClosed()) {
+                            old.sendFinishTask();
+                            old.close();
+                        }
+                        try {
+                            connectAliyunAsr(session);
+                        } catch (Exception e) {
+                            log.error("【阿里云 ASR】建立连接失败，sessionId={}", session.getId(), e);
+                        }
                     }
                 }
                 return;
@@ -316,7 +331,6 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         AtomicBoolean playing = isPlaying.get(sessionId);
         if (playing != null) playing.set(false);
 
-        // 重置 FANO VAD 说话状态（避免打断后缓冲残留）
         AtomicBoolean speaking = fanoSpeaking.get(sessionId);
         if (speaking != null) speaking.set(false);
         fanoAudioBuffer.put(sessionId, new ArrayList<>());
@@ -358,20 +372,22 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         StepfunWsClient asr = asrClients.remove(sessionId);
         if (asr != null && !asr.isClosed()) asr.close();
 
+        AliyunAsrClient aliyun = aliyunAsrClients.remove(sessionId);
+        if (aliyun != null && !aliyun.isClosed()) {
+            aliyun.sendFinishTask();
+            aliyun.close();
+        }
+
         llmService.clearState(sessionId);
 
         log.info("【资源清理】session 资源已全部释放，sessionId={}", sessionId);
     }
 
-    /**
-     * 计算 Int16 PCM 字节数组的 RMS 值（0~1 范围）。
-     */
     private double calcRms(byte[] pcmBytes) {
         int samples = pcmBytes.length / 2;
         if (samples == 0) return 0;
         double sum = 0;
         for (int i = 0; i < samples; i++) {
-            // 小端序 Int16
             short sample = (short) ((pcmBytes[i * 2] & 0xFF) | (pcmBytes[i * 2 + 1] << 8));
             double normalized = sample / 32768.0;
             sum += normalized * normalized;

@@ -1,5 +1,5 @@
 // AudioWorklet 处理器：将 Float32 PCM 转为 Int16 PCM，并按音量阈值过滤后发送到主线程
-const MIC_GAIN = 3
+const MIC_GAIN = 2
 
 class PcmProcessor extends AudioWorkletProcessor {
   constructor() {

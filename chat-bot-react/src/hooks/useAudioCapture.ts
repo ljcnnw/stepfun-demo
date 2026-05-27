@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react'
 
-const MIC_GAIN = 3
+const MIC_GAIN = 2
 
 interface UseAudioCaptureOptions {
   onFrame: (pcmBuffer: ArrayBuffer) => void
