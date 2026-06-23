@@ -20,7 +20,7 @@ export const CallScreen: React.FC = () => {
   const [duration, setDuration] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [provider, setProviderState] = useState<'sierra' | 'stepfun'>('sierra')
-  const [asrProvider, setAsrProviderState] = useState<'stepfun' | 'fano' | 'aliyun'>('stepfun')
+  const [asrProvider, setAsrProviderState] = useState<'stepfun' | 'fano' | 'aliyun' | 'volc'>('stepfun')
   const [threshold, setThresholdState] = useState<number>(() => {
     const saved = localStorage.getItem(THRESHOLD_KEY)
     const val = saved !== null ? parseFloat(saved) : DEFAULT_THRESHOLD
@@ -78,7 +78,7 @@ export const CallScreen: React.FC = () => {
     setProvider(val)
   }, [setProvider])
 
-  const handleAsrProviderChange = useCallback((val: 'stepfun' | 'fano' | 'aliyun') => {
+  const handleAsrProviderChange = useCallback((val: 'stepfun' | 'fano' | 'aliyun' | 'volc') => {
     setAsrProviderState(val)
     setAsrProvider(val)
   }, [setAsrProvider])

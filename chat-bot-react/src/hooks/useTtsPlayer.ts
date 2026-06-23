@@ -40,6 +40,7 @@ export function useTtsPlayer() {
       float32[i] = int16[i] / (int16[i] < 0 ? 0x8000 : 0x7fff)
     }
 
+    if (float32.length === 0) return
     const buffer = ctx.createBuffer(1, float32.length, 16000)
     buffer.copyToChannel(float32, 0)
 

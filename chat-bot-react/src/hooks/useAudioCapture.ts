@@ -24,6 +24,11 @@ export function useAudioCapture({ onFrame, onVolume }: UseAudioCaptureOptions) {
    * 申请麦克风权限 → 创建 AudioContext → 加载 AudioWorklet → 连接节点。
    */
   const start = useCallback(async () => {
+    // 防止重复启动
+    if (audioContextRef.current) {
+      console.warn('[AudioCapture] 已在采集中，忽略重复调用')
+      return
+    }
     // 申请麦克风权限，开启回声消除和降噪
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {

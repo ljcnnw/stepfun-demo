@@ -8,8 +8,8 @@ interface Props {
   onThresholdChange: (val: number) => void
   provider: 'sierra' | 'stepfun'
   onProviderChange: (val: 'sierra' | 'stepfun') => void
-  asrProvider: 'stepfun' | 'fano' | 'aliyun'
-  onAsrProviderChange: (val: 'stepfun' | 'fano' | 'aliyun') => void
+  asrProvider: 'stepfun' | 'fano' | 'aliyun' | 'volc'
+  onAsrProviderChange: (val: 'stepfun' | 'fano' | 'aliyun' | 'volc') => void
 }
 
 export interface SettingsPanelHandle {
@@ -67,6 +67,10 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, Props>(({
               className={`provider-btn ${asrProvider === 'aliyun' ? 'active' : ''}`}
               onClick={() => onAsrProviderChange('aliyun')}
             >Paraformer</button>
+            <button
+              className={`provider-btn ${asrProvider === 'volc' ? 'active' : ''}`}
+              onClick={() => onAsrProviderChange('volc')}
+            >豆包ASR</button>
           </div>
 
           <label className="settings-label" style={{ marginTop: 16 }}>麦克风音量阈值</label>

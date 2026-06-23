@@ -35,7 +35,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     isSpeakingRef.current = val
   }, [])
 
-  const connect = useCallback((initialProvider: 'sierra' | 'stepfun' = 'sierra', initialAsrProvider: 'stepfun' | 'fano' | 'aliyun' = 'stepfun') => {
+  const connect = useCallback((initialProvider: 'sierra' | 'stepfun' = 'sierra', initialAsrProvider: 'stepfun' | 'fano' | 'aliyun' | 'volc' = 'stepfun') => {
     const ws = new WebSocket(WS_URL)
     ws.binaryType = 'arraybuffer'
     wsRef.current = ws
@@ -219,7 +219,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
   }, [])
 
   // 通知后端切换 ASR provider
-  const setAsrProvider = useCallback((provider: 'stepfun' | 'fano' | 'aliyun') => {
+  const setAsrProvider = useCallback((provider: 'stepfun' | 'fano' | 'aliyun' | 'volc') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'asr.provider', provider }))
     }
