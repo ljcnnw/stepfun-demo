@@ -29,12 +29,9 @@ public class StepfunWsClient extends WebSocketClient {
     private final WebSocketSession clientSession;
     private final AtomicLong eventCounter = new AtomicLong(0);
     private AsrEventListener listener;
-    // 每轮对话只允许触发一次 LLM，收到 speech_started 时重置为 false
-    // 原因：full_rerun_on_commit 会对同一句话产生多个 completed 事件（item_id 不同），需防止重复触发
+    // 每轮对话只允许触发一次 LLM
+    // full_rerun_on_commit 会对同一句话产生多个 completed 事件（item_id 不同），需防止重复触发
     private final AtomicBoolean llmFiredThisTurn = new AtomicBoolean(false);
-    // VAD 触发后等待 ASR 首个 delta 确认是真实说话，再执行打断
-    // 避免环境噪音误触发 VAD 导致无谓打断
-    private final AtomicBoolean pendingInterrupt = new AtomicBoolean(false);
 
     /**
      * ASR 事件回调接口，由 AsrWebSocketHandler 实现。
@@ -44,6 +41,10 @@ public class StepfunWsClient extends WebSocketClient {
         void onSpeechConfirmed();
         // 用户说完一句有效内容后触发，transcript 为识别结果
         void onUserSpeechCompleted(String transcript);
+        // 识别增量文本（流式输出），默认空实现，Bench 测试时覆盖
+        default void onTranscriptDelta(String delta) {}
+        // ASR 发生错误，errMsg 为错误描述，默认空实现
+        default void onAsrError(String errMsg) {}
     }
 
     public StepfunWsClient(URI uri, String apiKey, WebSocketSession clientSession) {
@@ -85,26 +86,17 @@ public class StepfunWsClient extends WebSocketClient {
             if ("conversation.item.input_audio_transcription.delta".equals(type)
                     || "input_audio_buffer.speech_started".equals(type)) {
                 if ("input_audio_buffer.speech_started".equals(type)) {
-                    // 用户开始新一轮说话，重置 LLM 触发标志，允许本轮触发一次 LLM
-                    // 同时标记"待确认打断"，等 ASR 首个 delta 到来后再真正执行打断
-                    log.info("【VAD 检测】用户开始说话，等待 ASR 确认，sessionId={}", clientSession.getId());
+                    log.info("【VAD 检测】用户开始说话，sessionId={}", clientSession.getId());
                     llmFiredThisTurn.set(false);
-                    pendingInterrupt.set(true);
+                    if (listener != null) {
+                        listener.onSpeechConfirmed();
+                    }
                 }
                 if ("conversation.item.input_audio_transcription.delta".equals(type)) {
-                    // 收到 delta 时检查是否有实际文字内容
-                    // delta 可能是空字符串或纯标点（ASR 预热阶段），此时不触发打断
                     String deltaText = json.getString("text");
-                    if (pendingInterrupt.get() && isMeaningful(deltaText)) {
-                        // compareAndSet 保证每轮只触发一次打断回调
-                        if (pendingInterrupt.compareAndSet(true, false)) {
-                            log.info("【VAD 确认】ASR delta 有实际内容 [{}]，触发打断，sessionId={}", deltaText, clientSession.getId());
-                            if (listener != null) {
-                                listener.onSpeechConfirmed();
-                            }
-                        }
-                    } else if (pendingInterrupt.get()) {
-                        log.debug("【VAD 等待】delta 无实际内容 [{}]，继续等待，sessionId={}", deltaText, clientSession.getId());
+                    // 通知 Bench 流式增量（普通 ASR 模式下默认空实现，无副作用）
+                    if (listener != null && isMeaningful(deltaText)) {
+                        listener.onTranscriptDelta(deltaText);
                     }
                 }
                 // 转发给前端，前端据此更新 UI 状态
@@ -193,6 +185,19 @@ public class StepfunWsClient extends WebSocketClient {
         msg.put("type", "input_audio_buffer.append");
         msg.put("audio", base64Audio);
         send(msg.toJSONString());
+    }
+
+    /**
+     * 强制提交当前音频缓冲区，触发 ASR 对已发送音频进行识别。
+     * 用于文件播放结束后通知 Stepfun ASR 音频已结束，不再等待 VAD 静音检测。
+     */
+    public void sendCommit() {
+        if (!isOpen()) return;
+        JSONObject msg = new JSONObject();
+        msg.put("event_id", "event_" + eventCounter.incrementAndGet());
+        msg.put("type", "input_audio_buffer.commit");
+        send(msg.toJSONString());
+        log.info("【Stepfun】发送 input_audio_buffer.commit，强制触发识别");
     }
 
     /**

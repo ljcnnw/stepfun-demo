@@ -139,6 +139,7 @@ public class LlmService {
                                WebSocketSession clientSession,
                                LinkedBlockingQueue<String> sentenceQueue,
                                AtomicBoolean cancelled) {
+        long startMs = System.currentTimeMillis();
         try {
             log.info("【Sierra 开始推理】userText={}，sessionId={}", userText, sessionId);
 
@@ -212,7 +213,7 @@ public class LlmService {
             if (!remaining.isEmpty() && !cancelled.get()) sentenceQueue.put(remaining);
 
             safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
-            log.info("【Sierra 推理完成】sessionId={}", sessionId);
+            log.info("【Sierra 推理完成】耗时 {} ms，sessionId={}", System.currentTimeMillis() - startMs, sessionId);
 
             if (conversationEnded) {
                 sierraStateMap.remove(sessionId);
@@ -233,6 +234,7 @@ public class LlmService {
                                 LinkedBlockingQueue<String> sentenceQueue,
                                 AtomicBoolean cancelled) {
         StringBuilder fullReply = new StringBuilder();
+        long startMs = System.currentTimeMillis();
         try {
             log.info("【Stepfun 开始推理】userText={}，sessionId={}", userText, sessionId);
 
@@ -343,7 +345,7 @@ public class LlmService {
             if (!remaining.isEmpty() && !cancelled.get()) sentenceQueue.put(remaining);
 
             safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
-            log.info("【Stepfun 推理完成】sessionId={}", sessionId);
+            log.info("【Stepfun 推理完成】耗时 {} ms，sessionId={}", System.currentTimeMillis() - startMs, sessionId);
 
             if (!cancelled.get()) {
                 appendStepfunHistory(sessionId, userText, fullReply.toString());

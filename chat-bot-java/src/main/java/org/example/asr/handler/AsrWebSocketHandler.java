@@ -5,6 +5,7 @@ import org.example.asr.client.AliyunAsrClient;
 import org.example.asr.client.FanoAsrClient;
 import org.example.asr.client.StepfunWsClient;
 import org.example.asr.client.TtsWebSocketClient;
+import org.example.asr.client.VolcAsrClient;
 import org.example.asr.service.LlmService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,6 +58,48 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     @Value("${aliyun.asr.api-key}")
     private String aliyunAsrApiKey;
 
+    @Value("${volc.asr.url}")
+    private String volcAsrUrl;
+
+    @Value("${volc.asr.app-key}")
+    private String volcAsrAppKey;
+
+    @Value("${volc.asr.access-key}")
+    private String volcAsrAccessKey;
+
+    @Value("${volc.asr.resource-id}")
+    private String volcAsrResourceId;
+
+    @Value("${volc.asr.request.model-name}")
+    private String volcModelName;
+
+    @Value("${volc.asr.request.enable-itn}")
+    private boolean volcEnableItn;
+
+    @Value("${volc.asr.request.enable-punc}")
+    private boolean volcEnablePunc;
+
+    @Value("${volc.asr.request.enable-ddc}")
+    private boolean volcEnableDdc;
+
+    @Value("${volc.asr.request.enable-nonstream}")
+    private boolean volcEnableNonstream;
+
+    @Value("${volc.asr.request.end-window-size}")
+    private int volcEndWindowSize;
+
+    @Value("${volc.asr.request.force-to-speech-time}")
+    private int volcForceToSpeechTime;
+
+    @Value("${volc.asr.request.output-zh-variant:}")
+    private String volcOutputZhVariant;
+
+    @Value("${volc.asr.request.enable-lid}")
+    private boolean volcEnableLid;
+
+    @Value("${volc.asr.request.result-type}")
+    private String volcResultType;
+
     @Autowired
     private LlmService llmService;
 
@@ -64,6 +107,7 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
     private final Map<String, StepfunWsClient> asrClients = new ConcurrentHashMap<>();
     private final Map<String, AliyunAsrClient> aliyunAsrClients = new ConcurrentHashMap<>();
+    private final Map<String, VolcAsrClient> volcAsrClients = new ConcurrentHashMap<>();
     private final Map<String, List<TtsWebSocketClient>> ttsClients = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> llmCancelled = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> isPlaying = new ConcurrentHashMap<>();
@@ -126,6 +170,17 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         asr.connect();
         aliyunAsrClients.put(session.getId(), asr);
         log.info("【ASR 连接】已向阿里云 ASR 发起连接，sessionId={}", session.getId());
+    }
+
+    private void connectVolcAsr(WebSocketSession session) throws Exception {
+        VolcAsrClient asr = new VolcAsrClient(
+                volcAsrUrl, volcAsrAppKey, volcAsrAccessKey, volcAsrResourceId, session,
+                volcModelName, volcEnableItn, volcEnablePunc, volcEnableDdc, volcEnableNonstream,
+                volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType);
+        asr.setListener(buildListener(session));
+        asr.connect();
+        volcAsrClients.put(session.getId(), asr);
+        log.info("【ASR 连接】已向火山引擎 ASR 发起连接，sessionId={}", session.getId());
     }
 
     private void initFanoVadState(String sessionId) {
@@ -269,7 +324,7 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
             if ("asr.provider".equals(type)) {
                 String provider = json.getString("provider");
-                if ("stepfun".equals(provider) || "fano".equals(provider) || "aliyun".equals(provider)) {
+                if ("stepfun".equals(provider) || "fano".equals(provider) || "aliyun".equals(provider) || "volc".equals(provider)) {
                     String prev = asrProviderMap.put(session.getId(), provider);
                     log.info("【ASR Provider 切换】sessionId={}，{} -> {}", session.getId(), prev, provider);
                     if ("fano".equals(provider)) {
@@ -286,6 +341,19 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                             connectAliyunAsr(session);
                         } catch (Exception e) {
                             log.error("【阿里云 ASR】建立连接失败，sessionId={}", session.getId(), e);
+                        }
+                    }
+                    if ("volc".equals(provider)) {
+                        // 关闭旧连接，新建火山引擎 ASR 连接
+                        VolcAsrClient old = volcAsrClients.remove(session.getId());
+                        if (old != null && !old.isClosed()) {
+                            old.sendFinishFrame();
+                            old.close();
+                        }
+                        try {
+                            connectVolcAsr(session);
+                        } catch (Exception e) {
+                            log.error("【火山引擎 ASR】建立连接失败，sessionId={}", session.getId(), e);
                         }
                     }
                 }

@@ -123,6 +123,7 @@ public class AliyunAsrClient extends WebSocketClient {
                     deltaEvent.put("item_id", currentItemId);
                     deltaEvent.put("text", delta);
                     sendToClient(deltaEvent.toJSONString());
+                    if (listener != null) listener.onTranscriptDelta(delta);
                 }
             } else {
                 // 句子识别完成
