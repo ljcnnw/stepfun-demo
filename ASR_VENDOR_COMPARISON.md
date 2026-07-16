@@ -26,21 +26,25 @@
 | 当前主要优势 | 接入简单，粤语实测稳定，响应较快 | 调优空间较大，粤语效果较好 | 可以明确提示粤语，语种控制能力更清晰 |
 | 当前关注点 | 中文参数没有进一步区分普通话和粤语 | 参数较多，评测时必须固定配置 | 自动识别和提示粤语可能产生不同结果，需要分别评估 |
 
-## 二、主要可调参数对比
+## 二、差异化可调参数对比
 
-| 调整目的 | Stepfun | 豆包 / 火山引擎 | 阿里云 |
+以下仅列出三家当前接入的流式 ASR 接口中，参数能力或参数语义存在差异的项目；三家均具备的模型选择、音频格式/采样率、静音判停和文本数字规范化（ITN）不再重复列出。`—` 表示当前接口文档未提供对应的独立开关，并不等同于产品完全没有该能力。
+
+| 差异项 | Stepfun `stepaudio-2.5-asr-stream` | 豆包 / 火山引擎 BigASR `bigmodel_async` | 阿里云 `paraformer-realtime-v2` |
 | --- | --- | --- | --- |
-| 选择识别模型 | `model` | `resource-id`、`model_name` | `model` |
-| 指定或提示语种 | `language=zh` | `enable_lid` 检测语种 | `language_hints`，粤语使用 `yue` |
-| 调整断句速度 | `silence_duration_ms` | `end_window_size` | `max_sentence_silence` |
-| 调整语音检测灵敏度 | `threshold` | 主要通过判停参数控制 | 当前项目未单独配置 |
-| 防止短句过早切断 | 通过静音时间控制 | `force_to_speech_time` | 通过句尾静音时间控制 |
-| 提升最终准确率 | `full_rerun_on_commit` | `enable_nonstream` | 使用 `paraformer-realtime-v2` 的最终结果 |
-| 数字格式化 | `enable_itn` | `enable_itn` | 模型默认能力 |
-| 自动添加标点 | 模型能力 | `enable_punc` | 模型默认能力 |
-| 删除语气词 | 当前未单独配置 | `enable_ddc` | 当前未单独配置 |
-| 输出繁体中文 | 当前未单独配置 | `output_zh_variant` | 当前项目未配置 |
-| 返回语种检测结果 | 当前未返回 | `enable_lid` | 当前项目未单独展示 |
+| 语种控制方式 | `language` 直接指定识别语言；项目当前为 `zh` | `enable_lid` 仅开启语种检测，并在结果中返回语种，不是强制按粤语识别 | `language_hints` 为语言提示；可传 `yue` 提示粤语，留空由模型自行判断 |
+| VAD 灵敏度 | `threshold`：单独调节 VAD 判定严格度 | — | — |
+| 短语音防过早切分 | — | `force_to_speech_time`：设定最小有效语音时长后再允许判停 | — |
+| 二遍纠错 / 最终结果增强 | `full_rerun_on_commit`：提交后进行二遍识别纠错 | `enable_nonstream`：流式快速结果后，返回高精度最终结果 | 无同类独立开关；接口按自身流式最终结果输出 |
+| 流式结果形态 | 通过 `delta` / `completed` 事件分别接收增量与最终文本 | `result_type` 可选全量或增量返回 | 接口返回整句持续修正结果；当前接口未暴露同类切换项 |
+| 标点独立开关 | — | `enable_punc` | — |
+| 语气词 / 口语顺滑 | — | `enable_ddc`：删除“嗯、啊”等语气词 | — |
+| 中文书写变体 | — | `output_zh_variant`：可选简体、繁体、香港繁体 `hk`、台湾正体 `tw` | — |
+| 字级时间戳精对齐 | `enable_timestamp_align`：仅该模型生效，开启后在最终结果返回更精确的字级时间戳 | — | — |
+
+本项目当前开启：Stepfun 的 `full_rerun_on_commit`；火山的 `enable_punc`、`enable_ddc`、`enable_nonstream`、`enable_lid`，并设置 `force_to_speech_time`；阿里云的 `language_hints` 留空。比较准确率时，上述开关会改变最终文本，必须将其随 Run 一同记录。
+
+官方接口文档（本次核对）：[Stepfun 流式 ASR](https://platform.stepfun.com/docs/zh/api-reference/audio/asr-stream)、[火山引擎语音技术文档](https://www.volcengine.com/docs/6561/80818)、[阿里云百炼模型服务文档](https://help.aliyun.com/zh/model-studio/)。厂商会调整接口字段与支持范围，变更配置前应以对应账号控制台展示的最新文档为准。
 
 ## 三、当前项目的实际评测配置
 
