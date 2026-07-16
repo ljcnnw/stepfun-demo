@@ -58,6 +58,15 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     @Value("${aliyun.asr.api-key}")
     private String aliyunAsrApiKey;
 
+    @Value("${aliyun.asr.model:paraformer-realtime-v2}")
+    private String aliyunAsrModel;
+
+    @Value("${aliyun.asr.sample-rate:16000}")
+    private int aliyunAsrSampleRate;
+
+    @Value("${aliyun.asr.language-hints:}")
+    private String aliyunAsrLanguageHints;
+
     @Value("${volc.asr.url}")
     private String volcAsrUrl;
 
@@ -165,7 +174,13 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     }
 
     private void connectAliyunAsr(WebSocketSession session) throws Exception {
-        AliyunAsrClient asr = new AliyunAsrClient(aliyunAsrUrl, aliyunAsrApiKey, session);
+        AliyunAsrClient asr = new AliyunAsrClient(
+                aliyunAsrUrl,
+                aliyunAsrApiKey,
+                session,
+                aliyunAsrModel,
+                aliyunAsrSampleRate,
+                aliyunAsrLanguageHints);
         asr.setListener(buildListener(session));
         asr.connect();
         aliyunAsrClients.put(session.getId(), asr);
@@ -201,6 +216,9 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
             handleFanoAudioFrame(session, pcmBytes);
         } else if ("aliyun".equals(provider)) {
             AliyunAsrClient asr = aliyunAsrClients.get(session.getId());
+            if (asr != null) asr.sendAudioFrame(pcmBytes);
+        } else if ("volc".equals(provider)) {
+            VolcAsrClient asr = volcAsrClients.get(session.getId());
             if (asr != null) asr.sendAudioFrame(pcmBytes);
         } else {
             StepfunWsClient asr = asrClients.get(session.getId());

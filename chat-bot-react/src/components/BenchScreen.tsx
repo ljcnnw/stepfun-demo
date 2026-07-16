@@ -24,6 +24,10 @@ interface ProviderRecord {
   errorMsg?: string
 }
 
+function hasCaseAudio(testCase: TestCase) {
+  return testCase.hasAudio ?? Boolean(testCase.originalFileName && testCase.audioExt)
+}
+
 function makeInitialRecord(itemId: string): ProviderRecord {
   return { itemId, status: 'waiting', streamingText: '', transcript: '', total_ms: null, done: false }
 }
@@ -291,6 +295,7 @@ export function BenchScreen() {
 
   const handlePreviewCase = useCallback(async (tc: TestCase, e: React.MouseEvent) => {
     e.stopPropagation()
+    if (!hasCaseAudio(tc)) return
     if (playingCaseId === tc.id) {
       stopPreview()
       return
@@ -346,10 +351,14 @@ export function BenchScreen() {
   }, [])
 
   const handleLoadCase = useCallback(async (tc: TestCase) => {
+    if (!hasCaseAudio(tc)) {
+      alert('该用例还没有音频，请先在 Case 管理中补充音频。')
+      return
+    }
     setFileLoading(true)
     try {
       const buf = await fetchCaseAudio(tc.id)
-      const file = new File([buf], tc.originalFileName)
+      const file = new File([buf], tc.originalFileName || `audio${tc.audioExt || '.bin'}`)
       localFileRef.current = file
       await filePlayer.loadFile(file)
       setCaseName(tc.name)
@@ -539,13 +548,14 @@ export function BenchScreen() {
                         <div className="bench-case-item-name">{tc.name}</div>
                         {tc.note && <div className="bench-case-item-note">{tc.note}</div>}
                         <div className="bench-case-item-meta">
-                          {tc.durationSeconds.toFixed(1)}s · {tc.createdAt.slice(0, 10)}
+                          {hasCaseAudio(tc) ? `${tc.durationSeconds.toFixed(1)}s` : '待上传音频'} · {tc.createdAt.slice(0, 10)}
                         </div>
                       </div>
                       <button
                         className={`bench-case-play-btn${playingCaseId === tc.id ? ' playing' : ''}`}
                         onClick={e => handlePreviewCase(tc, e)}
-                        title={playingCaseId === tc.id ? '停止播放' : '播放'}
+                        disabled={!hasCaseAudio(tc)}
+                        title={!hasCaseAudio(tc) ? '待上传音频' : playingCaseId === tc.id ? '停止播放' : '播放'}
                       >
                         {playingCaseId === tc.id ? '■' : '▶'}
                       </button>

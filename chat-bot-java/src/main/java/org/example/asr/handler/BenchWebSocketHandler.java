@@ -66,6 +66,15 @@ public class BenchWebSocketHandler extends AbstractWebSocketHandler {
     @Value("${aliyun.asr.api-key}")
     private String aliyunAsrApiKey;
 
+    @Value("${aliyun.asr.model:paraformer-realtime-v2}")
+    private String aliyunAsrModel;
+
+    @Value("${aliyun.asr.sample-rate:16000}")
+    private int aliyunAsrSampleRate;
+
+    @Value("${aliyun.asr.language-hints:}")
+    private String aliyunAsrLanguageHints;
+
     // 火山引擎 ASR
     @Value("${volc.asr.url}")
     private String volcAsrUrl;
@@ -276,7 +285,13 @@ public class BenchWebSocketHandler extends AbstractWebSocketHandler {
                 break;
 
             case "aliyun":
-                AliyunAsrClient aliyun = new AliyunAsrClient(aliyunAsrUrl, aliyunAsrApiKey, session);
+                AliyunAsrClient aliyun = new AliyunAsrClient(
+                        aliyunAsrUrl,
+                        aliyunAsrApiKey,
+                        session,
+                        aliyunAsrModel,
+                        aliyunAsrSampleRate,
+                        aliyunAsrLanguageHints);
                 aliyun.setListener(buildStreamingListener(session, state, "aliyun"));
                 aliyun.connect();
                 state.aliyunClient = aliyun;

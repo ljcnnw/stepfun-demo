@@ -218,6 +218,7 @@ public class StepfunWsClient extends WebSocketClient {
         JSONObject transcription = new JSONObject();
         transcription.put("model", "stepaudio-2.5-asr-stream");
         transcription.put("language", "zh");
+        transcription.put("prompt", "这是香港证券交易客服场景。优先准确识别粤语、股票代码、证券名称、买入、卖出、沽货、股数、价格、港元等术语；保留用户原意。如果用户说的是普通话，最后输出简体中文。如果用户说的是粤语，最后输出的是香港繁体。");
         transcription.put("full_rerun_on_commit", true);
         transcription.put("enable_itn", true);
 

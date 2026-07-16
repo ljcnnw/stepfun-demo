@@ -14,6 +14,8 @@ import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -68,6 +70,9 @@ public class VolcAsrClient extends WebSocketClient {
     // 当前句子的 item_id，null 表示当前句未开始
     private String currentItemId = null;
 
+    private final Object sendLock = new Object();
+    private final CountDownLatch fullRequestSent = new CountDownLatch(1);
+
     public VolcAsrClient(String wsUrl, String appKey, String accessKey, String resourceId,
                          WebSocketSession clientSession,
                          String modelName, boolean enableItn, boolean enablePunc,
@@ -106,10 +111,14 @@ public class VolcAsrClient extends WebSocketClient {
         log.info("【火山引擎 ASR 连接建立】sessionId={}，taskId={}", clientSession.getId(), taskId);
         try {
             byte[] frame = buildFullClientRequest();
-            send(ByteBuffer.wrap(frame));
+            synchronized (sendLock) {
+                send(ByteBuffer.wrap(frame));
+            }
             log.info("【火山引擎 ASR】已发送 full client request，taskId={}", taskId);
         } catch (Exception e) {
             log.error("【火山引擎 ASR】发送 full client request 失败，sessionId={}", clientSession.getId(), e);
+        } finally {
+            fullRequestSent.countDown();
         }
     }
 
@@ -178,7 +187,9 @@ public class VolcAsrClient extends WebSocketClient {
         buf.putInt(pcm16k.length);
         buf.put(pcm16k);
         buf.flip();
-        send(buf);
+        synchronized (sendLock) {
+            send(buf);
+        }
     }
 
     /**
@@ -196,8 +207,14 @@ public class VolcAsrClient extends WebSocketClient {
         buf.put(RESERVED);
         buf.putInt(0);
         buf.flip();
-        send(buf);
+        synchronized (sendLock) {
+            send(buf);
+        }
         log.info("【火山引擎 ASR】已发送负包（finish），sessionId={}", clientSession.getId());
+    }
+
+    public boolean awaitFullRequestSent(long timeoutMs) throws InterruptedException {
+        return fullRequestSent.await(timeoutMs, TimeUnit.MILLISECONDS);
     }
 
     @Override
@@ -345,6 +362,9 @@ public class VolcAsrClient extends WebSocketClient {
             } else {
                 // ── 最终结果 ────────────────────────────────────────────────
                 String transcript = text.trim();
+                if (currentItemId == null) {
+                    log.info("【火山引擎 ASR】收到无中间态的最终句，sessionId={}，transcript={}", clientSession.getId(), transcript);
+                }
                 String itemId = currentItemId != null ? currentItemId : ("volc_" + System.currentTimeMillis());
                 currentItemId = null;
                 lastSentText = "";

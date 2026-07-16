@@ -10,16 +10,19 @@ import org.springframework.web.socket.WebSocketSession;
 
 import java.net.URI;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public class AliyunAsrClient extends WebSocketClient {
 
     private static final Logger log = LoggerFactory.getLogger(AliyunAsrClient.class);
 
-    private static final String MODEL = "paraformer-realtime-8k-v2";
-
     private final WebSocketSession clientSession;
     private final String taskId;
+    private final String model;
+    private final int sampleRate;
+    private final String languageHints;
     private StepfunWsClient.AsrEventListener listener;
 
     // 当前句子的 item_id（null 表示本句尚未开始）
@@ -27,11 +30,20 @@ public class AliyunAsrClient extends WebSocketClient {
     // 当前句子已发送给前端的文本长度，用于计算增量
     private final StringBuilder currentSentence = new StringBuilder();
 
-    public AliyunAsrClient(String wsUrl, String apiKey, WebSocketSession clientSession) throws Exception {
+    public AliyunAsrClient(
+            String wsUrl,
+            String apiKey,
+            WebSocketSession clientSession,
+            String model,
+            int sampleRate,
+            String languageHints) throws Exception {
         super(new URI(wsUrl));
         this.addHeader("Authorization", "Bearer " + apiKey);
         this.clientSession = clientSession;
         this.taskId = UUID.randomUUID().toString().replace("-", "");
+        this.model = model == null || model.trim().isEmpty() ? "paraformer-realtime-v2" : model.trim();
+        this.sampleRate = sampleRate <= 0 ? 16000 : sampleRate;
+        this.languageHints = languageHints == null ? "" : languageHints.trim();
     }
 
     public void setListener(StepfunWsClient.AsrEventListener listener) {
@@ -49,14 +61,18 @@ public class AliyunAsrClient extends WebSocketClient {
 
         JSONObject parameters = new JSONObject();
         parameters.put("format", "pcm");
-        parameters.put("sample_rate", 8000);
+        parameters.put("sample_rate", sampleRate);
         parameters.put("max_sentence_silence", 1300);
+        List<String> hints = parseLanguageHints();
+        if (!hints.isEmpty()) {
+            parameters.put("language_hints", hints);
+        }
 
         JSONObject payload = new JSONObject();
         payload.put("task_group", "audio");
         payload.put("task", "asr");
         payload.put("function", "recognition");
-        payload.put("model", MODEL);
+        payload.put("model", model);
         payload.put("parameters", parameters);
         payload.put("input", new JSONObject());
 
@@ -65,7 +81,8 @@ public class AliyunAsrClient extends WebSocketClient {
         runTask.put("payload", payload);
 
         send(runTask.toJSONString());
-        log.info("【阿里云 ASR】已发送 run-task，taskId={}", taskId);
+        log.info("【阿里云 ASR】已发送 run-task，taskId={}，model={}，sampleRate={}，languageHints={}",
+                taskId, model, sampleRate, hints);
     }
 
     @Override
@@ -169,10 +186,14 @@ public class AliyunAsrClient extends WebSocketClient {
     }
 
     /**
-     * 接收 16kHz PCM，降采样为 8kHz 后发送给阿里云（取每隔一个样本）。
+     * 评估链路统一传入 16kHz PCM。新模型直接使用 16k；旧 8k 模型保留降采样兼容。
      */
     public void sendAudioFrame(byte[] pcm16k) {
         if (!isOpen()) return;
+        if (sampleRate != 8000) {
+            send(ByteBuffer.wrap(pcm16k));
+            return;
+        }
         int inputSamples = pcm16k.length / 2;
         int outputSamples = inputSamples / 2;
         byte[] pcm8k = new byte[outputSamples * 2];
@@ -181,6 +202,16 @@ public class AliyunAsrClient extends WebSocketClient {
             pcm8k[i * 2 + 1] = pcm16k[i * 4 + 1];
         }
         send(ByteBuffer.wrap(pcm8k));
+    }
+
+    private List<String> parseLanguageHints() {
+        List<String> result = new ArrayList<>();
+        if (languageHints.isEmpty()) return result;
+        for (String item : languageHints.split("[,，\\s]+")) {
+            String value = item.trim();
+            if (!value.isEmpty()) result.add(value);
+        }
+        return result;
     }
 
     /**
