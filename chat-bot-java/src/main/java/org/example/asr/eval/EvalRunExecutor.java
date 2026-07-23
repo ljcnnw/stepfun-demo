@@ -19,6 +19,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -28,12 +29,18 @@ public class EvalRunExecutor {
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
     private static final Logger log = LoggerFactory.getLogger(EvalRunExecutor.class);
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    // 两个 case 并行、每个 case 四家并行：默认每家最多同时处理两条音频。
+    private final ExecutorService caseExecutor = Executors.newFixedThreadPool(2);
+    private final ExecutorService vendorExecutor = Executors.newFixedThreadPool(8);
     private final AtomicReference<TaskControl> activeTask = new AtomicReference<>();
     private final AsrVendorRunner vendorRunner;
     private final EvalEvaluatorClient evaluatorClient;
 
     @Value("${bench.cases.dir:./asr-test-cases}")
     private String casesDir;
+
+    @Value("${bench.runs.dir:./asr-eval-runs}")
+    private String runsDir;
 
     public EvalRunExecutor(AsrVendorRunner vendorRunner, EvalEvaluatorClient evaluatorClient) {
         this.vendorRunner = vendorRunner;
@@ -47,6 +54,8 @@ public class EvalRunExecutor {
         if (vendors == null || vendors.isEmpty()) throw new IllegalArgumentException("请至少选择一个厂商");
         JSONObject audioPcmDataUrls = run.getJSONObject("audioPcmDataUrls");
         if (audioPcmDataUrls == null) throw new IllegalArgumentException("缺少前端解码后的 PCM 音频");
+        Path pcmDir = runPcmDir(run.getString("runId"));
+        Files.createDirectories(pcmDir);
 
         JSONArray cases = new JSONArray();
         for (int i = 0; i < selectedIds.size(); i++) {
@@ -60,6 +69,7 @@ public class EvalRunExecutor {
             item.put("note", meta.getString("note"));
             item.put("caseType", valueOr(meta, "caseType", "sentence"));
             item.put("referenceText", valueOr(meta, "referenceText", ""));
+            item.put("cantoneseTraditionalReferenceText", valueOr(meta, "cantoneseTraditionalReferenceText", ""));
             item.put("criticalTermsText", valueOr(meta, "criticalTermsText", ""));
             item.put("acceptableTextsText", valueOr(meta, "acceptableTextsText", ""));
             item.put("sourceCaseId", meta.getString("sourceCaseId"));
@@ -74,7 +84,8 @@ public class EvalRunExecutor {
             item.put("backendAudioExt", meta.getString("audioExt"));
             String dataUrl = audioPcmDataUrls.getString(id);
             if (dataUrl == null || !dataUrl.contains(",")) throw new IllegalArgumentException("缺少 case PCM 音频: " + id);
-            item.put("pcmDataBase64", dataUrl.substring(dataUrl.indexOf(',') + 1));
+            byte[] pcm = Base64.getDecoder().decode(dataUrl.substring(dataUrl.indexOf(',') + 1));
+            Files.write(pcmPath(run.getString("runId"), id), pcm);
             JSONObject resultMap = new JSONObject();
             for (int j = 0; j < vendors.size(); j++) resultMap.put(vendors.getString(j), idleResult(vendors.getString(j), run.getString("evaluationMode")));
             item.put("vendors", resultMap);
@@ -86,7 +97,7 @@ public class EvalRunExecutor {
     }
 
     public boolean start(JSONObject run, Consumer<JSONObject> persist) {
-        TaskControl control = new TaskControl(run, persist, null);
+        TaskControl control = new TaskControl(run, persist, null, false);
         if (!activeTask.compareAndSet(null, control)) return false;
         run.put("status", "running");
         appendLog(run, "开始后端评估任务");
@@ -96,10 +107,21 @@ public class EvalRunExecutor {
     }
 
     public boolean rerun(JSONObject run, String caseId, Consumer<JSONObject> persist) {
-        TaskControl control = new TaskControl(run, persist, caseId);
+        TaskControl control = new TaskControl(run, persist, caseId, false);
         if (!activeTask.compareAndSet(null, control)) return false;
         run.put("status", "running");
         appendLog(run, "开始重跑 case: " + caseId);
+        persist.accept(run);
+        executor.submit(() -> execute(control));
+        return true;
+    }
+
+    public boolean resumeIncomplete(JSONObject run, Consumer<JSONObject> persist) {
+        TaskControl control = new TaskControl(run, persist, null, true);
+        if (!activeTask.compareAndSet(null, control)) return false;
+        run.put("status", "running");
+        run.remove("finishedAt");
+        appendLog(run, "从断点续跑：跳过已完成厂商，仅重试未完成、失败或超时项");
         persist.accept(run);
         executor.submit(() -> execute(control));
         return true;
@@ -190,13 +212,21 @@ public class EvalRunExecutor {
     private void execute(TaskControl control) {
         try {
             JSONArray cases = control.run.getJSONArray("cases");
+            List<Future<?>> caseFutures = new ArrayList<>();
             for (int i = 0; i < cases.size() && !control.stopRequested; i++) {
                 JSONObject caseItem = cases.getJSONObject(i);
                 String caseId = caseItem.getString("id");
                 if (control.onlyCaseId != null && !control.onlyCaseId.equals(caseId)) continue;
-                executeCase(control, caseItem);
+                caseFutures.add(caseExecutor.submit(() -> {
+                    try {
+                        executeCase(control, caseItem);
+                    } catch (Exception error) {
+                        throw new IllegalStateException(error);
+                    }
+                }));
                 if (control.onlyCaseId != null) break;
             }
+            for (Future<?> future : caseFutures) future.get();
             if (control.stopRequested) {
                 control.run.put("status", "stopped");
                 appendLog(control.run, "任务已停止");
@@ -217,27 +247,49 @@ public class EvalRunExecutor {
     private void executeCase(TaskControl control, JSONObject caseItem) throws Exception {
         String caseId = caseItem.getString("id");
         JSONArray vendors = control.run.getJSONArray("selectedVendors");
+        if (control.resumeOnlyIncomplete && allVendorsCompleted(caseItem, vendors)) {
+            appendLog(control.run, "跳过已完成 case: " + caseItem.getString("name"));
+            return;
+        }
         byte[] pcm;
         try {
             appendLog(control.run, "解码 case: " + caseItem.getString("name"));
-            pcm = decodePcm(caseItem);
+            pcm = decodePcm(control.run.getString("runId"), caseItem);
         } catch (Exception error) {
-            for (int i = 0; i < vendors.size(); i++) setFailure(caseItem, vendors.getString(i), control.run.getString("evaluationMode"), "decode", message(error), null, null, "failed");
+            for (int i = 0; i < vendors.size(); i++) {
+                String vendor = vendors.getString(i);
+                if (control.resumeOnlyIncomplete && "done".equals(result(caseItem, vendor).getString("status"))) continue;
+                setFailure(caseItem, vendor, control.run.getString("evaluationMode"), "decode", message(error), null, null, "failed");
+            }
             appendLog(control.run, "音频解码失败: " + message(error));
-            control.persist.accept(control.run);
+            synchronized (control.run) { control.persist.accept(control.run); }
             return;
         }
 
+        List<Future<?>> futures = new ArrayList<>();
         for (int i = 0; i < vendors.size() && !control.stopRequested; i++) {
-            waitIfPaused(control);
-            if (control.stopRequested) return;
             String vendor = vendors.getString(i);
             JSONObject result = result(caseItem, vendor);
-            result.put("status", "running");
-            result.put("phase", "recognizing");
-            result.put("errorMsg", "");
-            appendLog(control.run, "运行 " + caseItem.getString("name") + " / " + vendor);
-            control.persist.accept(control.run);
+            if (control.resumeOnlyIncomplete && "done".equals(result.getString("status"))) continue;
+            futures.add(vendorExecutor.submit(() -> executeVendor(control, caseItem, pcm, vendor)));
+        }
+        for (Future<?> future : futures) future.get();
+        synchronized (control.run) { control.persist.accept(control.run); }
+    }
+
+    private void executeVendor(TaskControl control, JSONObject caseItem, byte[] pcm, String vendor) {
+        if (control.stopRequested) return;
+        try {
+            waitIfPaused(control);
+            if (control.stopRequested) return;
+            JSONObject result = result(caseItem, vendor);
+            synchronized (control.run) {
+                result.put("status", "running");
+                result.put("phase", "recognizing");
+                result.put("errorMsg", "");
+                appendLog(control.run, "运行 " + caseItem.getString("name") + " / " + vendor);
+                control.persist.accept(control.run);
+            }
             try {
                 AsrVendorRunner.VendorOutcome outcome = vendorRunner.run(vendor, pcm, () -> control.stopRequested);
                 if (control.stopRequested) return;
@@ -253,7 +305,7 @@ public class EvalRunExecutor {
                             outcome.finalLatencyMs
                     );
                     JSONObject score = evaluatorClient.score(scoreRequest);
-                    applyScore(result, score, outcome);
+                    synchronized (control.run) { applyScore(result, score, outcome); }
                     log.info(
                             "run={} case={} vendor={} scoring success cer={} wer={} entityAccuracy={} pass={} normalizerVersion={}",
                             control.run.getString("runId"),
@@ -265,7 +317,7 @@ public class EvalRunExecutor {
                             score.get("pass"),
                             score.get("normalizerVersion")
                     );
-                    appendLog(control.run, caseItem.getString("name") + " / " + vendor + " 完成");
+                    synchronized (control.run) { appendLog(control.run, caseItem.getString("name") + " / " + vendor + " 完成"); }
                 } catch (Exception scoreError) {
                     log.warn(
                             "run={} case={} vendor={} scoring failed error={}",
@@ -274,16 +326,23 @@ public class EvalRunExecutor {
                             vendor,
                             message(scoreError)
                     );
-                    setFailure(caseItem, vendor, control.run.getString("evaluationMode"), "scoring", message(scoreError), outcome.transcript, outcome, "failed");
-                    appendLog(control.run, caseItem.getString("name") + " / " + vendor + " 评分失败");
+                    synchronized (control.run) {
+                        setFailure(caseItem, vendor, control.run.getString("evaluationMode"), "scoring", message(scoreError), outcome.transcript, outcome, "failed");
+                        appendLog(control.run, caseItem.getString("name") + " / " + vendor + " 评分失败");
+                    }
                 }
             } catch (Exception recognitionError) {
                 if (control.stopRequested) return;
                 String status = recognitionError instanceof TimeoutException ? "timeout" : "failed";
-                setFailure(caseItem, vendor, control.run.getString("evaluationMode"), "recognition", message(recognitionError), null, null, status);
-                appendLog(control.run, caseItem.getString("name") + " / " + vendor + " 识别失败: " + message(recognitionError));
+                synchronized (control.run) {
+                    setFailure(caseItem, vendor, control.run.getString("evaluationMode"), "recognition", message(recognitionError), null, null, status);
+                    appendLog(control.run, caseItem.getString("name") + " / " + vendor + " 识别失败: " + message(recognitionError));
+                }
             }
-            control.persist.accept(control.run);
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        } finally {
+            synchronized (control.run) { control.persist.accept(control.run); }
         }
     }
 
@@ -389,19 +448,29 @@ public class EvalRunExecutor {
         return result;
     }
 
+    private boolean allVendorsCompleted(JSONObject caseItem, JSONArray vendors) {
+        for (int i = 0; i < vendors.size(); i++) {
+            JSONObject vendorResult = result(caseItem, vendors.getString(i));
+            if (!"done".equals(vendorResult.getString("status"))) return false;
+        }
+        return true;
+    }
+
     private JSONObject readCaseMeta(String id) throws Exception {
         Path meta = caseDir(id).resolve("meta.json");
         if (!Files.exists(meta)) throw new IllegalArgumentException("找不到 case: " + id);
         return JSONObject.parseObject(new String(Files.readAllBytes(meta), StandardCharsets.UTF_8));
     }
 
-    private byte[] decodePcm(JSONObject caseItem) {
-        String value = caseItem.getString("pcmDataBase64");
-        if (value == null || value.isEmpty()) throw new IllegalArgumentException("Run 缺少 PCM 音频数据");
-        return Base64.getDecoder().decode(value);
+    private byte[] decodePcm(String runId, JSONObject caseItem) throws Exception {
+        Path path = pcmPath(runId, caseItem.getString("id"));
+        if (!Files.exists(path)) throw new IllegalArgumentException("Run 缺少 PCM 音频数据");
+        return Files.readAllBytes(path);
     }
 
     private Path caseDir(String id) { return Paths.get(casesDir).toAbsolutePath().resolve(id); }
+    private Path runPcmDir(String runId) { return Paths.get(runsDir).toAbsolutePath().resolve(runId).resolve("pcm"); }
+    private Path pcmPath(String runId, String caseId) { return runPcmDir(runId).resolve(caseId + ".pcm"); }
     private String valueOr(JSONObject object, String key, String fallback) { String value = object.getString(key); return value == null ? fallback : value; }
     private String now() { return LocalDateTime.now().format(FMT); }
     private String message(Exception error) { return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage(); }
@@ -426,30 +495,43 @@ public class EvalRunExecutor {
         request.put("transcript", transcript == null ? "" : transcript);
         request.put("textMode", evaluationMode);
         request.put("criticalTerms", splitTerms(caseItem.getString("criticalTermsText")));
-        request.put("acceptableTexts", splitAlternatives(caseItem.getString("acceptableTextsText")));
+        JSONArray acceptableTexts = splitAlternatives(caseItem.getString("acceptableTextsText"));
+        String cantoneseTraditionalReference = caseItem.getString("cantoneseTraditionalReferenceText");
+        if (cantoneseTraditionalReference != null && !cantoneseTraditionalReference.trim().isEmpty()) {
+            acceptableTexts.add(cantoneseTraditionalReference.trim());
+        }
+        request.put("acceptableTexts", acceptableTexts);
         request.put("passRuleType", caseItem.getString("passRuleType"));
         request.put("passThreshold", caseItem.getDoubleValue("passThreshold"));
         return request;
     }
 
     private void appendLog(JSONObject run, String text) {
-        JSONArray logs = run.getJSONArray("logs");
-        if (logs == null) { logs = new JSONArray(); run.put("logs", logs); }
-        JSONObject line = new JSONObject();
-        line.put("time", now());
-        line.put("text", text);
-        logs.add(line);
+        synchronized (run) {
+            JSONArray logs = run.getJSONArray("logs");
+            if (logs == null) { logs = new JSONArray(); run.put("logs", logs); }
+            JSONObject line = new JSONObject();
+            line.put("time", now());
+            line.put("text", text);
+            logs.add(line);
+        }
     }
 
-    @PreDestroy public void shutdown() { executor.shutdownNow(); }
+    @PreDestroy public void shutdown() { executor.shutdownNow(); caseExecutor.shutdownNow(); vendorExecutor.shutdownNow(); }
 
     private static class TaskControl {
         final JSONObject run;
         final Consumer<JSONObject> persist;
         final String onlyCaseId;
+        final boolean resumeOnlyIncomplete;
         final Object monitor = new Object();
         volatile boolean pauseRequested;
         volatile boolean stopRequested;
-        TaskControl(JSONObject run, Consumer<JSONObject> persist, String onlyCaseId) { this.run = run; this.persist = persist; this.onlyCaseId = onlyCaseId; }
+        TaskControl(JSONObject run, Consumer<JSONObject> persist, String onlyCaseId, boolean resumeOnlyIncomplete) {
+            this.run = run;
+            this.persist = persist;
+            this.onlyCaseId = onlyCaseId;
+            this.resumeOnlyIncomplete = resumeOnlyIncomplete;
+        }
     }
 }

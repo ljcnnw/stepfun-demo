@@ -47,7 +47,7 @@ public class BenchWebSocketHandler extends AbstractWebSocketHandler {
     // FANO 专用 RMS VAD 参数（仅用于 call 模式下 FANO 的切句）
     private static final double FANO_VAD_RMS_THRESHOLD = 0.015;
     private static final int FANO_VAD_SPEECH_FRAMES = 2;
-    private static final int FANO_VAD_SILENCE_FRAMES = 8;
+    private static final int FANO_VAD_SILENCE_FRAMES = 10;
 
     // FANO 批量识别线程池
     private final ExecutorService fanoExecutor = Executors.newCachedThreadPool();

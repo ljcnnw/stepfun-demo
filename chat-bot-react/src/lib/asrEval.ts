@@ -1,6 +1,6 @@
 import type { TestCase } from '../api/benchCases'
 
-export type Vendor = 'stepfun' | 'volc' | 'aliyun'
+export type Vendor = 'stepfun' | 'volc' | 'aliyun' | 'fano'
 export type CaseType = 'number' | 'money' | 'name' | 'sentence' | 'mixed' | 'noise' | 'custom'
 export type PassRuleType = 'cer' | 'entity' | 'mixed'
 export type EvalTextMode = 'strict' | 'loose'
@@ -13,6 +13,7 @@ export const VENDOR_LIST: Array<{ key: Vendor; label: string }> = [
   { key: 'stepfun', label: 'Stepfun' },
   { key: 'volc', label: '豆包 / 火山' },
   { key: 'aliyun', label: '阿里云' },
+  { key: 'fano', label: 'FANO' },
 ]
 
 export const CASE_TYPE_LIST: Array<{ key: CaseType; label: string }> = [
@@ -50,6 +51,7 @@ export interface EvalCaseConfig {
   note: string
   caseType: CaseType
   referenceText: string
+  cantoneseTraditionalReferenceText: string
   criticalTermsText: string
   acceptableTextsText: string
   sourceCaseId?: string
@@ -103,6 +105,7 @@ export interface CaseEvalRecord {
   caseId: string
   caseName: string
   referenceText: string
+  cantoneseTraditionalReferenceText?: string
   caseType: CaseType
   vendors: Record<Vendor, VendorEvalResult>
 }
@@ -148,6 +151,7 @@ export function createBlankCase(): EvalCaseConfig {
     note: '',
     caseType: 'sentence',
     referenceText: '',
+    cantoneseTraditionalReferenceText: '',
     criticalTermsText: '',
     acceptableTextsText: '',
     passRuleType: 'cer',
@@ -168,6 +172,7 @@ export function backendCaseToEvalCase(item: TestCase): EvalCaseConfig {
     note: item.note ?? '',
     caseType,
     referenceText: item.referenceText ?? '',
+    cantoneseTraditionalReferenceText: item.cantoneseTraditionalReferenceText ?? '',
     criticalTermsText: item.criticalTermsText ?? '',
     acceptableTextsText: item.acceptableTextsText ?? '',
     sourceCaseId: item.sourceCaseId,
@@ -523,11 +528,13 @@ export function createCaseRecord(caseItem: EvalCaseConfig): CaseEvalRecord {
     caseId: caseItem.id,
     caseName: caseItem.name,
     referenceText: caseItem.referenceText,
+    cantoneseTraditionalReferenceText: caseItem.cantoneseTraditionalReferenceText,
     caseType: caseItem.caseType,
     vendors: {
       stepfun: createIdleVendorResult('stepfun'),
       volc: createIdleVendorResult('volc'),
       aliyun: createIdleVendorResult('aliyun'),
+      fano: createIdleVendorResult('fano'),
     },
   }
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { listEvalRuns, type EvalRunListItem } from '../../api/evalRuns'
+import { listEvalRuns, resumeEvalRun, stopEvalRun, type EvalRunListItem } from '../../api/evalRuns'
 import { formatLatency, formatPercent, getVendorLabel } from '../../lib/asrEval'
 
 interface EvalRunHistoryContentProps {
@@ -16,6 +16,7 @@ export function EvalRunHistoryContent({ onOpenRun }: EvalRunHistoryContentProps)
   const [runs, setRuns] = useState<EvalRunListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [operatingRunId, setOperatingRunId] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -28,6 +29,20 @@ export function EvalRunHistoryContent({ onOpenRun }: EvalRunHistoryContentProps)
       setLoading(false)
     }
   }, [])
+
+  const runCommand = useCallback(async (runId: string, command: 'resume' | 'stop') => {
+    setOperatingRunId(runId)
+    setError('')
+    try {
+      const updated = command === 'resume' ? await resumeEvalRun(runId) : await stopEvalRun(runId)
+      await refresh()
+      onOpenRun(updated.runId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '任务操作失败')
+    } finally {
+      setOperatingRunId(null)
+    }
+  }, [onOpenRun, refresh])
 
   useEffect(() => {
     let disposed = false
@@ -87,6 +102,10 @@ export function EvalRunHistoryContent({ onOpenRun }: EvalRunHistoryContentProps)
               const passRate = average(summaries.map(summary => summary.passRate))
               const avgCer = average(summaries.map(summary => summary.avgCer))
               const finalLatency = average(summaries.map(summary => summary.avgFinalLatencyMs))
+              const retryable = (run.summary.failureVendors + run.summary.timeoutVendors) > 0
+              const canStart = run.status === 'failed' || run.status === 'stopped' || (run.status === 'completed' && retryable)
+              const canStop = run.status === 'running' || run.status === 'pausing' || run.status === 'paused'
+              const operating = operatingRunId === run.runId
               return (
                 <tr key={run.runId}>
                   <td>
@@ -100,7 +119,14 @@ export function EvalRunHistoryContent({ onOpenRun }: EvalRunHistoryContentProps)
                   <td>{formatPercent(passRate)}</td>
                   <td>{avgCer === null ? '-' : avgCer.toFixed(3)}</td>
                   <td>{formatLatency(finalLatency)}</td>
-                  <td><button type="button" className="ghost-btn" onClick={() => onOpenRun(run.runId)}>查看详情</button></td>
+                  <td>
+                    <div className="run-actions">
+                      <button type="button" className="ghost-btn" disabled={!canStart || operating} onClick={() => void runCommand(run.runId, 'resume')}>开始</button>
+                      <button type="button" className="ghost-btn danger" disabled={!canStop || operating} onClick={() => void runCommand(run.runId, 'stop')}>停止</button>
+                      <button type="button" className="ghost-btn" disabled={!retryable || canStop || operating} onClick={() => void runCommand(run.runId, 'resume')}>重跑失败 case</button>
+                      <button type="button" className="ghost-btn" disabled={operating} onClick={() => onOpenRun(run.runId)}>查看详情</button>
+                    </div>
+                  </td>
                 </tr>
               )
             })}

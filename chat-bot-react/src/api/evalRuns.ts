@@ -50,6 +50,7 @@ export interface EvalRunCaseRecord {
   note: string
   caseType: CaseType
   referenceText: string
+  cantoneseTraditionalReferenceText?: string
   criticalTermsText: string
   acceptableTextsText?: string
   sourceCaseId?: string

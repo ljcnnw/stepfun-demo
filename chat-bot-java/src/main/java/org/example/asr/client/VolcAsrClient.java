@@ -79,6 +79,18 @@ public class VolcAsrClient extends WebSocketClient {
                          boolean enableDdc, boolean enableNonstream,
                          int endWindowSize, int forceToSpeechTime,
                          String outputZhVariant, boolean enableLid, String resultType) throws Exception {
+        this(wsUrl, appKey, accessKey, resourceId, clientSession,
+                modelName, enableItn, enablePunc, enableDdc, enableNonstream,
+                endWindowSize, forceToSpeechTime, outputZhVariant, enableLid, resultType, endWindowSize);
+    }
+
+    public VolcAsrClient(String wsUrl, String appKey, String accessKey, String resourceId,
+                         WebSocketSession clientSession,
+                         String modelName, boolean enableItn, boolean enablePunc,
+                         boolean enableDdc, boolean enableNonstream,
+                         int configuredEndWindowSize, int forceToSpeechTime,
+                         String outputZhVariant, boolean enableLid, String resultType,
+                         int vadEndWindowSize) throws Exception {
         super(new URI(wsUrl));
         this.clientSession = clientSession;
         this.taskId = UUID.randomUUID().toString().replace("-", "");
@@ -87,7 +99,7 @@ public class VolcAsrClient extends WebSocketClient {
         this.enablePunc = enablePunc;
         this.enableDdc = enableDdc;
         this.enableNonstream = enableNonstream;
-        this.endWindowSize = endWindowSize;
+        this.endWindowSize = vadEndWindowSize;
         this.forceToSpeechTime = forceToSpeechTime;
         this.outputZhVariant = outputZhVariant;
         this.enableLid = enableLid;

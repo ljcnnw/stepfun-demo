@@ -40,6 +40,15 @@ import { PressHoldRecorder } from '../components/eval/PressHoldRecorder'
 import { EvalRunHistoryContent } from '../components/eval/EvalRunHistoryContent'
 import { EvalCasesPage } from './EvalCasesPage'
 import { EvalRunPage } from './EvalRunPage'
+import {
+  CASE_LENGTH_OPTIONS,
+  NOISE_SCENARIO_OPTIONS,
+  getCaseLengthLabel,
+  getNoiseScenarioLabel,
+  matchesCaseFilters,
+  type CaseLengthFilter,
+  type NoiseScenarioFilter,
+} from '../lib/caseFilters'
 import './EvalPage.css'
 
 const DASHBOARD_CASES_PER_PAGE = 10
@@ -161,9 +170,15 @@ export function EvalPage() {
   const [modalState, setModalState] = useState<EvalModalState>(null)
   const [detailAudioUrl, setDetailAudioUrl] = useState<string | null>(null)
   const [detailAudioLoading, setDetailAudioLoading] = useState(false)
+  const [playingCaseId, setPlayingCaseId] = useState<string | null>(null)
+  const [matrixAudioLoadingCaseId, setMatrixAudioLoadingCaseId] = useState<string | null>(null)
   const [caseListPage, setCaseListPage] = useState(1)
+  const [caseLengthFilter, setCaseLengthFilter] = useState<CaseLengthFilter>('all')
+  const [noiseScenarioFilter, setNoiseScenarioFilter] = useState<NoiseScenarioFilter>('all')
 
   const casesRef = useRef<EvalCaseConfig[]>([])
+  const matrixAudioRef = useRef<{ caseId: string; audio: HTMLAudioElement; url: string } | null>(null)
+  const matrixAudioRequestRef = useRef(0)
 
   casesRef.current = cases
 
@@ -223,13 +238,17 @@ export function EvalPage() {
     return selectedCaseIds.map(id => map.get(id)).filter((item): item is EvalCaseConfig => Boolean(item))
   }, [cases, selectedCaseIds])
 
-  const caseListTotalPages = Math.max(1, Math.ceil(cases.length / DASHBOARD_CASES_PER_PAGE))
+  const filteredDashboardCases = useMemo(
+    () => cases.filter(item => matchesCaseFilters(item, caseLengthFilter, noiseScenarioFilter)),
+    [caseLengthFilter, cases, noiseScenarioFilter],
+  )
+  const caseListTotalPages = Math.max(1, Math.ceil(filteredDashboardCases.length / DASHBOARD_CASES_PER_PAGE))
   const visibleDashboardCases = useMemo(() => {
     const start = (caseListPage - 1) * DASHBOARD_CASES_PER_PAGE
-    return cases.slice(start, start + DASHBOARD_CASES_PER_PAGE)
-  }, [caseListPage, cases])
-  const caseListStart = cases.length === 0 ? 0 : (caseListPage - 1) * DASHBOARD_CASES_PER_PAGE + 1
-  const caseListEnd = Math.min(caseListPage * DASHBOARD_CASES_PER_PAGE, cases.length)
+    return filteredDashboardCases.slice(start, start + DASHBOARD_CASES_PER_PAGE)
+  }, [caseListPage, filteredDashboardCases])
+  const caseListStart = filteredDashboardCases.length === 0 ? 0 : (caseListPage - 1) * DASHBOARD_CASES_PER_PAGE + 1
+  const caseListEnd = Math.min(caseListPage * DASHBOARD_CASES_PER_PAGE, filteredDashboardCases.length)
 
   useEffect(() => {
     setCaseListPage(prev => Math.min(prev, caseListTotalPages))
@@ -343,8 +362,8 @@ export function EvalPage() {
   }, [])
 
   const selectAllCases = useCallback(() => {
-    setSelectedCaseIds(cases.filter(item => item.enabled && hasCaseAudio(item)).map(item => item.id))
-  }, [cases])
+    setSelectedCaseIds(filteredDashboardCases.filter(item => item.enabled && hasCaseAudio(item)).map(item => item.id))
+  }, [filteredDashboardCases])
 
   const selectNoiseSuite = useCallback(() => {
     const noiseCases = cases.filter(item => item.enabled && hasCaseAudio(item) && item.sourceCaseId && item.noiseProfile)
@@ -386,6 +405,7 @@ export function EvalPage() {
       caseId: item.id,
       caseName: item.name,
       referenceText: item.referenceText,
+      cantoneseTraditionalReferenceText: item.cantoneseTraditionalReferenceText,
       caseType: item.caseType,
       vendors: item.vendors,
     }])))
@@ -433,6 +453,63 @@ export function EvalPage() {
     const mimeType = mimeFromName(caseItem.audioFileName ?? caseItem.backendAudioExt ?? backendId)
     return new Blob([audioBuffer], { type: mimeType })
   }, [])
+
+  const stopMatrixAudio = useCallback(() => {
+    matrixAudioRequestRef.current += 1
+    const current = matrixAudioRef.current
+    if (current) {
+      current.audio.pause()
+      current.audio.removeAttribute('src')
+      current.audio.load()
+      URL.revokeObjectURL(current.url)
+      matrixAudioRef.current = null
+    }
+    setPlayingCaseId(null)
+    setMatrixAudioLoadingCaseId(null)
+  }, [])
+
+  const playMatrixCaseAudio = useCallback(async (caseId: string) => {
+    if (matrixAudioRef.current?.caseId === caseId) {
+      stopMatrixAudio()
+      return
+    }
+
+    stopMatrixAudio()
+    const requestId = ++matrixAudioRequestRef.current
+    const caseItem = casesRef.current.find(item => item.id === caseId)
+    if (!caseItem || !hasCaseAudio(caseItem)) {
+      setBackendError('该 case 没有可播放的音频')
+      return
+    }
+
+    setMatrixAudioLoadingCaseId(caseId)
+    try {
+      const blob = await resolveCaseAudio(caseItem)
+      if (matrixAudioRequestRef.current !== requestId) return
+
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      const cleanup = () => {
+        if (matrixAudioRef.current?.audio !== audio) return
+        URL.revokeObjectURL(url)
+        matrixAudioRef.current = null
+        setPlayingCaseId(null)
+        setMatrixAudioLoadingCaseId(null)
+      }
+      audio.onended = cleanup
+      audio.onerror = cleanup
+      matrixAudioRef.current = { caseId, audio, url }
+      setPlayingCaseId(caseId)
+      setMatrixAudioLoadingCaseId(null)
+      await audio.play()
+    } catch (err) {
+      if (matrixAudioRequestRef.current !== requestId) return
+      const message = err instanceof Error ? err.message : '音频播放失败'
+      setBackendError(message)
+      addLog(`结果矩阵音频播放失败：${message}`)
+      stopMatrixAudio()
+    }
+  }, [addLog, resolveCaseAudio, stopMatrixAudio])
 
   const buildAudioPcmDataUrls = useCallback(async (): Promise<Record<string, string>> => {
     const pcmDataUrls: Record<string, string> = {}
@@ -496,6 +573,7 @@ export function EvalPage() {
       note: activeDetailCase.note,
       caseType: activeDetailCase.caseType,
       referenceText: activeDetailCase.referenceText,
+      cantoneseTraditionalReferenceText: activeDetailCase.cantoneseTraditionalReferenceText,
       criticalTermsText: activeDetailCase.criticalTermsText,
       acceptableTextsText: activeDetailCase.acceptableTextsText,
       passRuleType: activeDetailCase.passRuleType,
@@ -569,8 +647,8 @@ export function EvalPage() {
   const detailDiffSegments = useMemo(() => {
     if (!detailCaseRecord || !selectedVendorResult) return []
     return diffText(
-      normalizeText(detailCaseRecord.referenceText || ''),
-      normalizeText(selectedVendorResult.transcript || ''),
+      (selectedVendorResult.normalizedReference || normalizeText(selectedVendorResult.referenceVariantUsed || detailCaseRecord.referenceText || '')).replace(/\s+/g, ''),
+      (selectedVendorResult.normalizedTranscript || normalizeText(selectedVendorResult.transcript || '')).replace(/\s+/g, ''),
     )
   }, [detailCaseRecord, selectedVendorResult])
 
@@ -579,6 +657,10 @@ export function EvalPage() {
       selectedVendors.every(vendor => record.vendors[vendor].status === 'done' || record.vendors[vendor].status === 'failed' || record.vendors[vendor].status === 'timeout')
     ).length
   }, [activeRecords, selectedVendors])
+
+  const hasRetryableResult = useMemo(() => activeRecords.some(record =>
+    selectedVendors.some(vendor => record.vendors[vendor].status !== 'done'),
+  ), [activeRecords, selectedVendors])
 
   const handleAudioFileUpload = useCallback(async (caseId: string, file: File | null) => {
     if (!file) return
@@ -647,6 +729,7 @@ export function EvalPage() {
   }, [addLog, clearDetailAudio, detailCaseConfig, resolveCaseAudio])
 
   useEffect(() => () => clearDetailAudio(), [clearDetailAudio])
+  useEffect(() => () => stopMatrixAudio(), [stopMatrixAudio])
 
   const renderVendorCell = (record: CaseEvalRecord, vendor: Vendor) => {
     const result = record.vendors[vendor]
@@ -712,11 +795,27 @@ export function EvalPage() {
               {backendLoading ? '同步中...' : '同步后端样本'}
             </button>
             <button type="button" className="ghost-btn" onClick={addLocalCase}>新增临时 case</button>
-            <button type="button" className="ghost-btn" onClick={selectAllCases}>全选启用 case</button>
+            <button type="button" className="ghost-btn" onClick={selectAllCases}>全选当前筛选</button>
             <button type="button" className="ghost-btn" onClick={selectNoiseSuite} disabled={!cases.some(item => item.sourceCaseId && item.noiseProfile)}>一键选择抗噪集</button>
             <button type="button" className="ghost-btn" onClick={selectNonNoiseCases}>一键选择非抗噪集</button>
             <button type="button" className="ghost-btn" onClick={clearSelection}>清空选择</button>
           </div>
+        </div>
+
+        <div className="case-filter-bar" aria-label="Case 筛选">
+          <label>
+            <span>对话长短</span>
+            <select value={caseLengthFilter} onChange={(event) => { setCaseLengthFilter(event.target.value as CaseLengthFilter); setCaseListPage(1) }}>
+              {CASE_LENGTH_OPTIONS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>噪音场景</span>
+            <select value={noiseScenarioFilter} onChange={(event) => { setNoiseScenarioFilter(event.target.value as NoiseScenarioFilter); setCaseListPage(1) }}>
+              {NOISE_SCENARIO_OPTIONS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+            </select>
+          </label>
+          <span className="case-filter-count">匹配 {filteredDashboardCases.length} / {cases.length} 条</span>
         </div>
 
         {backendError ? <div className="notice error">{backendError}</div> : null}
@@ -734,6 +833,8 @@ export function EvalPage() {
                 <th>用</th>
                 <th>名称</th>
                 <th>类型</th>
+                <th>对话长短</th>
+                <th>噪音场景</th>
                 <th>状态</th>
                 <th>参考文本</th>
                 <th>关键实体</th>
@@ -759,6 +860,8 @@ export function EvalPage() {
                   </td>
                   <td><div className="case-name">{item.name}</div><div className="case-note">{item.note || item.source}</div></td>
                   <td>{getCaseTypeLabel(item.caseType)}</td>
+                  <td>{getCaseLengthLabel(item)}</td>
+                  <td>{getNoiseScenarioLabel(item)}</td>
                   <td>{hasReferenceText(item) ? <span className="badge badge-success">已填写</span> : <span className="badge badge-danger">缺少</span>}</td>
                   <td className="table-text">{item.referenceText || '待填写'}</td>
                   <td className="table-text">{item.criticalTermsText || '—'}</td>
@@ -771,14 +874,14 @@ export function EvalPage() {
         </div>
         <div className="case-pagination" aria-label="评估看板 Case 列表分页">
           <div className="case-pagination-status">
-            {cases.length === 0 ? '暂无 Case' : `显示第 ${caseListStart}-${caseListEnd} 条，共 ${cases.length} 条`}
+            {filteredDashboardCases.length === 0 ? '当前筛选条件下暂无 Case' : `显示第 ${caseListStart}-${caseListEnd} 条，匹配 ${filteredDashboardCases.length} / ${cases.length} 条`}
           </div>
           <div className="case-pagination-actions">
             <button type="button" className="ghost-btn" onClick={() => setCaseListPage(1)} disabled={caseListPage === 1}>首页</button>
             <button type="button" className="ghost-btn" onClick={() => setCaseListPage(prev => Math.max(1, prev - 1))} disabled={caseListPage === 1}>上一页</button>
             <label className="case-page-select">
               <span>第</span>
-              <select aria-label="选择评估看板 Case 页码" value={caseListPage} onChange={(event) => setCaseListPage(Number(event.target.value))} disabled={cases.length === 0}>
+              <select aria-label="选择评估看板 Case 页码" value={caseListPage} onChange={(event) => setCaseListPage(Number(event.target.value))} disabled={filteredDashboardCases.length === 0}>
                 {Array.from({ length: caseListTotalPages }, (_, index) => index + 1).map(page => <option key={page} value={page}>{page}</option>)}
               </select>
               <span>/ {caseListTotalPages} 页</span>
@@ -819,7 +922,7 @@ export function EvalPage() {
             <div className="run-actions">
               <button type="button" className="primary-btn" onClick={() => void runTask()} disabled={backendLoading || runStatus === 'running' || runStatus === 'pausing' || !canStartRun}>{backendLoading ? '准备音频中...' : '开始批跑'}</button>
               <button type="button" className="ghost-btn" onClick={pauseRun} disabled={runStatus !== 'running'}>暂停</button>
-              <button type="button" className="ghost-btn" onClick={resumeRun} disabled={runStatus !== 'paused'}>继续</button>
+              <button type="button" className="ghost-btn" onClick={resumeRun} disabled={!(runStatus === 'paused' || runStatus === 'failed' || runStatus === 'stopped' || (runStatus === 'completed' && hasRetryableResult))}>{runStatus === 'paused' ? '继续' : '断点续跑'}</button>
               <button type="button" className="ghost-btn danger" onClick={stopRun} disabled={runStatus === 'idle' || runStatus === 'completed' || runStatus === 'stopped'}>停止</button>
             </div>
             <div className="hint">{canStartRun ? '当前配置可开始运行。' : '请选择至少一个已上传音频且已填写参考文本的 case，并选择厂商。'}</div>
@@ -863,17 +966,31 @@ export function EvalPage() {
         </div>
         <div className="result-table-wrap">
           <table className="result-table">
-            <thead><tr><th>Case</th><th>参考文本</th><th>状态</th>{selectedVendors.map(vendor => <th key={vendor}>{getVendorLabel(vendor)}</th>)}<th>最佳</th><th>结论</th></tr></thead>
+            <thead><tr><th>Case</th><th>音频</th><th>状态</th>{selectedVendors.map(vendor => <th key={vendor}>{getVendorLabel(vendor)}</th>)}<th>最佳</th><th>结论</th></tr></thead>
             <tbody>
               {visibleRecords.map((record) => {
                 const bestVendor = vendorOrderOf(record, selectedVendors)
                 const doneCount = selectedVendors.filter(vendor => isTerminalStatus(record.vendors[vendor].status)).length
                 const passCount = selectedVendors.filter(vendor => record.vendors[vendor].pass).length
                 const flowState = getCaseFlowState(record, selectedVendors)
+                const caseItem = cases.find(item => item.id === record.caseId)
+                const playable = Boolean(caseItem && hasCaseAudio(caseItem))
+                const isPlaying = playingCaseId === record.caseId
+                const isLoadingAudio = matrixAudioLoadingCaseId === record.caseId
                 return (
                   <tr key={record.caseId} className="result-row">
                     <td><div className="case-name">{record.caseName}</div><div className="case-note">{getCaseTypeLabel(record.caseType)}</div></td>
-                    <td className="table-text ref-cell">{record.referenceText || '待填写'}</td>
+                    <td className="matrix-audio-cell">
+                      <button
+                        type="button"
+                        className="matrix-audio-btn"
+                        disabled={!playable || isLoadingAudio}
+                        title={playable ? (isPlaying ? '停止播放' : '播放 case 音频') : '该 case 没有音频'}
+                        onClick={() => void playMatrixCaseAudio(record.caseId)}
+                      >
+                        {isLoadingAudio ? '加载中...' : isPlaying ? '■ 停止' : '▶ 播放'}
+                      </button>
+                    </td>
                     <td><span className={`badge ${flowState.key === 'done' ? 'badge-success' : flowState.key === 'failed' || flowState.key === 'timeout' ? 'badge-danger' : flowState.key === 'paused' ? 'badge-warn' : 'badge-info'}`}>{flowState.label}</span></td>
                     {selectedVendors.map(vendor => <td key={vendor}>{renderVendorCell(record, vendor)}</td>)}
                     <td>{bestVendor ? getVendorLabel(bestVendor) : '—'}</td>
@@ -918,6 +1035,7 @@ export function EvalPage() {
                 </select>
               </label>
               <label><span>参考文本</span><textarea rows={5} value={activeDetailCase.referenceText} onChange={(event) => upsertCase(activeDetailCase.id, item => ({ ...item, referenceText: event.target.value }))} placeholder="填写标准转写文本" /></label>
+              <label><span>粤语繁体参考文本</span><textarea rows={5} value={activeDetailCase.cantoneseTraditionalReferenceText} onChange={(event) => upsertCase(activeDetailCase.id, item => ({ ...item, cantoneseTraditionalReferenceText: event.target.value }))} placeholder="用于并行评分，自动采用较优结果" /></label>
               <label><span>关键实体</span><input value={activeDetailCase.criticalTermsText} onChange={(event) => upsertCase(activeDetailCase.id, item => ({ ...item, criticalTermsText: event.target.value }))} placeholder="例如：12345, 2026年7月9日" /></label>
               <label><span>可接受文本</span><textarea rows={3} value={activeDetailCase.acceptableTextsText} onChange={(event) => upsertCase(activeDetailCase.id, item => ({ ...item, acceptableTextsText: event.target.value }))} placeholder="每行一个等价转写" /></label>
               <div className="inline-grid">
@@ -953,11 +1071,12 @@ export function EvalPage() {
         >
           {selectedVendorResult && detailSelection ? (
             <div className="inspector">
-              <div className="audio-upload"><div className="audio-title">参考文本</div><div className="detail-text">{detailCaseRecord?.referenceText || '未填写'}</div></div>
+              <div className="audio-upload"><div className="audio-title">采用的参考文本</div><div className="detail-text">{selectedVendorResult.referenceVariantUsed || detailCaseRecord?.referenceText || '未填写'}</div></div>
+              {detailCaseRecord?.cantoneseTraditionalReferenceText ? <div className="audio-upload"><div className="audio-title">粤语繁体参考文本</div><div className="detail-text">{detailCaseRecord.cantoneseTraditionalReferenceText}</div></div> : null}
               <div className="audio-upload"><div className="audio-title">识别结果</div><div className="detail-text">{selectedVendorResult.transcript || selectedVendorResult.errorMsg || '空结果'}</div></div>
-              <div className="audio-upload"><div className="audio-title">文本差异</div><div className="diff-row">{detailDiffSegments.map((segment, index) => <span key={`${segment.type}_${index}`} className={`diff-segment diff-${segment.type}`}>{segment.text}</span>)}</div></div>
-              <div className="audio-upload"><div className="audio-title">归一化后</div><div className="detail-text muted">REF: {normalizeText(detailCaseRecord?.referenceText || '') || '—'}<br />HYP: {normalizeText(selectedVendorResult.transcript || '') || '—'}</div></div>
-              <div className="audio-upload"><div className="audio-title">指标</div><div className="detail-metrics"><span>CER {selectedVendorResult.cer === null ? '—' : selectedVendorResult.cer.toFixed(3)}</span><span>WER {selectedVendorResult.wer === null ? '—' : selectedVendorResult.wer.toFixed(3)}</span><span>首包 {formatLatency(selectedVendorResult.firstLatencyMs)}</span><span>总时延 {formatLatency(selectedVendorResult.finalLatencyMs)}</span><span>实体 {selectedVendorResult.entityAccuracy === null ? '—' : formatPercent(selectedVendorResult.entityAccuracy)}</span><span>结果 {selectedVendorResult.pass ? '通过' : '未通过'}</span>{selectedVendorResult.normalizerVersion ? <span>归一化 {selectedVendorResult.normalizerVersion}</span> : null}</div></div>
+              <div className="audio-upload"><div className="audio-title">归一化字符差异</div><div className="diff-row">{detailDiffSegments.map((segment, index) => <span key={`${segment.type}_${index}`} className={`diff-segment diff-${segment.type}`}>{segment.text}</span>)}</div></div>
+              <div className="audio-upload"><div className="audio-title">归一化后</div><div className="detail-text muted">REF: {normalizeText(selectedVendorResult.referenceVariantUsed || detailCaseRecord?.referenceText || '') || '—'}<br />HYP: {normalizeText(selectedVendorResult.transcript || '') || '—'}</div></div>
+              <div className="audio-upload"><div className="audio-title">指标</div><div className="detail-metrics"><span>CER {selectedVendorResult.cer === null ? '—' : selectedVendorResult.cer.toFixed(3)}</span><span>WER {selectedVendorResult.wer === null ? '—' : selectedVendorResult.wer.toFixed(3)}</span><span>首包 {formatLatency(selectedVendorResult.firstLatencyMs)}</span><span>总时延 {formatLatency(selectedVendorResult.finalLatencyMs)}</span><span>实体 {selectedVendorResult.entityAccuracy === null ? '—' : formatPercent(selectedVendorResult.entityAccuracy)}</span><span>结果 {selectedVendorResult.pass ? '通过' : '未通过'}</span>{selectedVendorResult.referenceVariantUsed ? <span>采用参考 {selectedVendorResult.referenceVariantUsed}</span> : null}{selectedVendorResult.normalizerVersion ? <span>归一化 {selectedVendorResult.normalizerVersion}</span> : null}</div></div>
               <div className="audio-upload"><div className="audio-title">编辑统计</div><div className="detail-metrics detail-metrics-stacked"><span>字符级 {formatEditTriple(selectedVendorResult.characterSubstitutions, selectedVendorResult.characterInsertions, selectedVendorResult.characterDeletions)}</span><span>词级 {formatEditTriple(selectedVendorResult.wordSubstitutions, selectedVendorResult.wordInsertions, selectedVendorResult.wordDeletions)}</span></div></div>
               {detailAudioUrl ? <audio controls src={detailAudioUrl} style={{ width: '100%' }} /> : null}
             </div>

@@ -28,7 +28,14 @@ public class StepfunWsClient extends WebSocketClient {
 
     private final WebSocketSession clientSession;
     private final AtomicLong eventCounter = new AtomicLong(0);
+    /**
+     * Stepfun 的流式事件在部分会话中会重复携带“截至当前的全文”，而不是纯增量。
+     * 这里按 item_id 保存上次全文，将其转换为前端和 Bench 链路都能安全追加的真实增量。
+     */
+    private final Map<String, String> partialTranscriptByItemId = new HashMap<>();
     private AsrEventListener listener;
+    private boolean deliverAllCompletedEvents;
+    private volatile int vadSilenceDurationMs = 1000;
     // 每轮对话只允许触发一次 LLM
     // full_rerun_on_commit 会对同一句话产生多个 completed 事件（item_id 不同），需防止重复触发
     private final AtomicBoolean llmFiredThisTurn = new AtomicBoolean(false);
@@ -54,6 +61,28 @@ public class StepfunWsClient extends WebSocketClient {
 
     public void setListener(AsrEventListener listener) {
         this.listener = listener;
+    }
+
+    /**
+     * 评估模式需要接收 full_rerun_on_commit 产生的最终 completed 事件；
+     * 普通对话仍保持每轮只触发一次的默认行为。
+     */
+    public void setDeliverAllCompletedEvents(boolean deliverAllCompletedEvents) {
+        this.deliverAllCompletedEvents = deliverAllCompletedEvents;
+    }
+
+    /**
+     * 更新服务端 VAD 判停时长。连接已建立时立即发送 session.update；
+     * 尚未建连时保存配置，待 onOpen 中首次 session.update 一并生效。
+     */
+    public void setVadSilenceDurationMs(int vadSilenceDurationMs) {
+        if (this.vadSilenceDurationMs == vadSilenceDurationMs) {
+            return;
+        }
+        this.vadSilenceDurationMs = vadSilenceDurationMs;
+        if (isOpen()) {
+            sendSessionUpdate();
+        }
     }
 
     private static Map<String, String> buildHeaders(String apiKey) {
@@ -93,11 +122,17 @@ public class StepfunWsClient extends WebSocketClient {
                     }
                 }
                 if ("conversation.item.input_audio_transcription.delta".equals(type)) {
-                    String deltaText = json.getString("text");
+                    String deltaText = toIncrementalDelta(json.getString("item_id"), json.getString("text"));
                     // 通知 Bench 流式增量（普通 ASR 模式下默认空实现，无副作用）
                     if (listener != null && isMeaningful(deltaText)) {
                         listener.onTranscriptDelta(deltaText);
                     }
+                    // 已经发送过的全文无需再次推给前端，避免通话气泡反复追加。
+                    if (!isMeaningful(deltaText)) {
+                        return;
+                    }
+                    json.put("text", deltaText);
+                    message = json.toJSONString();
                 }
                 // 转发给前端，前端据此更新 UI 状态
                 if (clientSession.isOpen()) {
@@ -110,6 +145,7 @@ public class StepfunWsClient extends WebSocketClient {
 
             // 转录完成事件：提取文本，过滤无效内容，触发 LLM
             if ("conversation.item.input_audio_transcription.completed".equals(type)) {
+                clearPartialTranscript(json.getString("item_id"));
                 String transcript = json.getString("transcript");
                 // 部分情况下 transcript 在 content 数组里
                 if ((transcript == null || transcript.isEmpty()) && json.containsKey("content")) {
@@ -144,7 +180,7 @@ public class StepfunWsClient extends WebSocketClient {
 
                 // compareAndSet 保证每轮只触发一次 LLM
                 // full_rerun_on_commit 会产生多个 completed 事件，第一个有效的触发后其余忽略
-                if (listener != null && llmFiredThisTurn.compareAndSet(false, true)) {
+                if (listener != null && (deliverAllCompletedEvents || llmFiredThisTurn.compareAndSet(false, true))) {
                     log.info("【触发 LLM】本轮首次有效识别，开始推理，transcript={}，sessionId={}", transcript, clientSession.getId());
                     listener.onUserSpeechCompleted(transcript);
                 } else {
@@ -172,6 +208,48 @@ public class StepfunWsClient extends WebSocketClient {
     private static boolean isMeaningful(String transcript) {
         if (transcript == null || transcript.isEmpty()) return false;
         return transcript.replaceAll("[\\p{P}\\p{Z}\\s]", "").length() > 0;
+    }
+
+    /**
+     * 将 Stepfun 可能返回的累计中间文本转为增量。
+     *
+     * 正常的纯增量事件不满足前缀关系，会原样透传；累计文本则只保留新增后缀。
+     * 识别引擎发生回改、当前文本反而变短时不追加旧内容，等待后续结果或 completed 覆盖即可。
+     */
+    private String toIncrementalDelta(String itemId, String text) {
+        if (text == null || text.isEmpty() || itemId == null || itemId.isEmpty()) {
+            return text;
+        }
+
+        synchronized (partialTranscriptByItemId) {
+            String previous = partialTranscriptByItemId.get(itemId);
+            if (previous == null || previous.isEmpty()) {
+                partialTranscriptByItemId.put(itemId, text);
+                return text;
+            }
+            if (text.equals(previous)) {
+                return "";
+            }
+            if (text.startsWith(previous)) {
+                partialTranscriptByItemId.put(itemId, text);
+                return text.substring(previous.length());
+            }
+            if (previous.startsWith(text)) {
+                partialTranscriptByItemId.put(itemId, text);
+                return "";
+            }
+
+            // 无前缀关系时按协议的纯增量语义处理，避免误丢失识别引擎新增的文本。
+            partialTranscriptByItemId.put(itemId, previous + text);
+            return text;
+        }
+    }
+
+    private void clearPartialTranscript(String itemId) {
+        if (itemId == null || itemId.isEmpty()) return;
+        synchronized (partialTranscriptByItemId) {
+            partialTranscriptByItemId.remove(itemId);
+        }
     }
 
     /**
@@ -222,10 +300,10 @@ public class StepfunWsClient extends WebSocketClient {
         transcription.put("full_rerun_on_commit", true);
         transcription.put("enable_itn", true);
 
-        // VAD 配置：服务端 VAD，静音 800ms 后认为说话结束
+        // VAD 配置：服务端 VAD，静音达到配置时长后认为说话结束
         JSONObject vad = new JSONObject();
         vad.put("type", "server_vad");
-        vad.put("silence_duration_ms", 800);
+        vad.put("silence_duration_ms", vadSilenceDurationMs);
         vad.put("threshold", 0.8);
 
         JSONObject inputAudio = new JSONObject();

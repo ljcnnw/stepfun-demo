@@ -4,6 +4,14 @@ import type { ServerEvent, ChatMessage } from '../types/asr'
 // const WS_URL = 'wss://invited-mileage-tribal-especially.trycloudflare.com/asr'
 const WS_URL = 'ws://localhost:8080/asr'
 
+export type ConfigurableAsrProvider = 'stepfun' | 'aliyun' | 'volc'
+
+const DEFAULT_VAD_DURATIONS: Record<ConfigurableAsrProvider, number> = {
+  stepfun: 1000,
+  aliyun: 1000,
+  volc: 1000,
+}
+
 interface UseAsrWebSocketOptions {
   onVadSpeechStarted: () => void
   onTtsAudioDelta: (base64: string) => void
@@ -29,6 +37,14 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
   // VAD 触发后等待 ASR 首个 delta 确认是真实说话，再执行打断
   // speech_started 时置 true，第一个 delta 时消费（compareAndSet 语义）
   const pendingInterruptRef = useRef(false)
+  // 连接前保存设置，连接建立后自动下发，确保浏览器保存的设置可即时应用。
+  const vadDurationsRef = useRef<Record<ConfigurableAsrProvider, number>>(DEFAULT_VAD_DURATIONS)
+
+  const sendVadConfig = useCallback((ws: WebSocket, provider: ConfigurableAsrProvider, silenceDurationMs: number) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'asr.vad.config', provider, silenceDurationMs }))
+    }
+  }, [])
 
   // 供 CallScreen 在 TTS 音频事件回调中同步更新播放状态
   const setIsSpeaking = useCallback((val: boolean) => {
@@ -45,6 +61,10 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
       setConnected(true)
       ws.send(JSON.stringify({ type: 'llm.provider', provider: initialProvider }))
       ws.send(JSON.stringify({ type: 'asr.provider', provider: initialAsrProvider }))
+      const vadDurations = Object.entries(vadDurationsRef.current) as Array<[ConfigurableAsrProvider, number]>
+      vadDurations.forEach(([provider, duration]) => {
+        sendVadConfig(ws, provider, duration)
+      })
     }
 
     ws.onmessage = (e: MessageEvent<string>) => {
@@ -205,7 +225,7 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
       setConnected(false)
       wsRef.current = null
     }
-  }, [onVadSpeechStarted, onTtsAudioDelta, onTtsAudioDone])
+  }, [onVadSpeechStarted, onTtsAudioDelta, onTtsAudioDone, sendVadConfig])
 
   const disconnect = useCallback(() => {
     wsRef.current?.close()
@@ -225,6 +245,12 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     }
   }, [])
 
+  const setAsrVadDuration = useCallback((provider: ConfigurableAsrProvider, silenceDurationMs: number) => {
+    vadDurationsRef.current = { ...vadDurationsRef.current, [provider]: silenceDurationMs }
+    const ws = wsRef.current
+    if (ws) sendVadConfig(ws, provider, silenceDurationMs)
+  }, [sendVadConfig])
+
   // 通知后端切换 LLM provider
   const setProvider = useCallback((provider: 'sierra' | 'stepfun') => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -240,5 +266,5 @@ export function useAsrWebSocket(options: UseAsrWebSocketOptions) {
     pendingInterruptRef.current = false
   }, [])
 
-  return { connect, disconnect, sendAudio, setProvider, setAsrProvider, messages, connected, reset, setIsSpeaking }
+  return { connect, disconnect, sendAudio, setProvider, setAsrProvider, setAsrVadDuration, messages, connected, reset, setIsSpeaking }
 }

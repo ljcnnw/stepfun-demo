@@ -5,12 +5,32 @@ import { TranscriptPanel } from './TranscriptPanel'
 import { SettingsPanel } from './SettingsPanel'
 import type { SettingsPanelHandle } from './SettingsPanel'
 import { useAsrWebSocket } from '../hooks/useAsrWebSocket'
+import type { ConfigurableAsrProvider } from '../hooks/useAsrWebSocket'
 import { useAudioCapture } from '../hooks/useAudioCapture'
 import { useTtsPlayer } from '../hooks/useTtsPlayer'
 import './CallScreen.css'
 
 const THRESHOLD_KEY = 'mic_threshold'
-const DEFAULT_THRESHOLD = 0.02
+const DEFAULT_THRESHOLD = 0.05
+const VAD_DURATION_KEY = 'asr_vad_silence_durations'
+const DEFAULT_VAD_DURATIONS: Record<ConfigurableAsrProvider, number> = {
+  stepfun: 1000,
+  aliyun: 1000,
+  volc: 1000,
+}
+
+function loadVadDurations(): Record<ConfigurableAsrProvider, number> {
+  try {
+    const saved = JSON.parse(localStorage.getItem(VAD_DURATION_KEY) || '{}') as Partial<Record<ConfigurableAsrProvider, number>>
+    return {
+      stepfun: typeof saved.stepfun === 'number' ? saved.stepfun : DEFAULT_VAD_DURATIONS.stepfun,
+      aliyun: typeof saved.aliyun === 'number' ? saved.aliyun : DEFAULT_VAD_DURATIONS.aliyun,
+      volc: typeof saved.volc === 'number' ? saved.volc : DEFAULT_VAD_DURATIONS.volc,
+    }
+  } catch {
+    return DEFAULT_VAD_DURATIONS
+  }
+}
 
 type CallState = 'idle' | 'listening' | 'speaking' | 'error'
 
@@ -26,10 +46,12 @@ export const CallScreen: React.FC = () => {
     const val = saved !== null ? parseFloat(saved) : DEFAULT_THRESHOLD
     return isNaN(val) ? DEFAULT_THRESHOLD : val
   })
+  const [vadDurations, setVadDurations] = useState<Record<ConfigurableAsrProvider, number>>(loadVadDurations)
   const timerRef = useRef<number | null>(null)
   const setIsSpeakingRef = useRef<((val: boolean) => void) | null>(null)
   const waveRef = useRef<WaveAnimationHandle | null>(null)
   const settingsPanelRef = useRef<SettingsPanelHandle | null>(null)
+  const vadDurationsRef = useRef(vadDurations)
 
   const { playChunk, interrupt, dispose } = useTtsPlayer()
 
@@ -49,7 +71,7 @@ export const CallScreen: React.FC = () => {
     setCallState('listening')
   }, [])
 
-  const { connect, disconnect, sendAudio, setProvider, setAsrProvider, messages, reset, setIsSpeaking } = useAsrWebSocket({
+  const { connect, disconnect, sendAudio, setProvider, setAsrProvider, setAsrVadDuration, messages, reset, setIsSpeaking } = useAsrWebSocket({
     onVadSpeechStarted: handleVadSpeechStarted,
     onTtsAudioDelta: handleTtsAudioDelta,
     onTtsAudioDone: handleTtsAudioDone,
@@ -73,6 +95,15 @@ export const CallScreen: React.FC = () => {
     localStorage.setItem(THRESHOLD_KEY, String(val))
   }, [setThreshold])
 
+  const handleVadDurationChange = useCallback((provider: ConfigurableAsrProvider, value: number) => {
+    const duration = Math.max(200, Math.min(5000, Math.round(value / 100) * 100))
+    const next = { ...vadDurationsRef.current, [provider]: duration }
+    vadDurationsRef.current = next
+    setVadDurations(next)
+    localStorage.setItem(VAD_DURATION_KEY, JSON.stringify(next))
+    setAsrVadDuration(provider, duration)
+  }, [setAsrVadDuration])
+
   const handleProviderChange = useCallback((val: 'sierra' | 'stepfun') => {
     setProviderState(val)
     setProvider(val)
@@ -87,6 +118,10 @@ export const CallScreen: React.FC = () => {
     setErrorMsg('')
     reset()
     try {
+      const savedVadDurations = Object.entries(vadDurationsRef.current) as Array<[ConfigurableAsrProvider, number]>
+      savedVadDurations.forEach(([provider, duration]) => {
+        setAsrVadDuration(provider, duration)
+      })
       connect(provider, asrProvider)
       await startCapture()
       setThreshold(threshold)
@@ -97,7 +132,7 @@ export const CallScreen: React.FC = () => {
       setErrorMsg('无法获取麦克风权限，请在浏览器中允许麦克风访问')
       setCallState('error')
     }
-  }, [connect, startCapture, reset, setThreshold, threshold, provider, asrProvider])
+  }, [connect, startCapture, reset, setThreshold, setAsrVadDuration, threshold, provider, asrProvider])
 
   const endCall = useCallback(() => {
     interrupt()
@@ -167,6 +202,8 @@ export const CallScreen: React.FC = () => {
         onClose={() => setSettingsOpen(false)}
         threshold={threshold}
         onThresholdChange={handleThresholdChange}
+        vadDurations={vadDurations}
+        onVadDurationChange={handleVadDurationChange}
         provider={provider}
         onProviderChange={handleProviderChange}
         asrProvider={asrProvider}

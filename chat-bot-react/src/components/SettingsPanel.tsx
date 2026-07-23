@@ -1,4 +1,5 @@
 import { useRef, useImperativeHandle, forwardRef } from 'react'
+import type { ConfigurableAsrProvider } from '../hooks/useAsrWebSocket'
 import './SettingsPanel.css'
 
 interface Props {
@@ -6,6 +7,8 @@ interface Props {
   onClose: () => void
   threshold: number
   onThresholdChange: (val: number) => void
+  vadDurations: Record<ConfigurableAsrProvider, number>
+  onVadDurationChange: (provider: ConfigurableAsrProvider, value: number) => void
   provider: 'sierra' | 'stepfun'
   onProviderChange: (val: 'sierra' | 'stepfun') => void
   asrProvider: 'stepfun' | 'fano' | 'aliyun' | 'volc'
@@ -18,7 +21,7 @@ export interface SettingsPanelHandle {
 
 export const SettingsPanel = forwardRef<SettingsPanelHandle, Props>(({
   open, onClose, threshold, onThresholdChange, provider, onProviderChange,
-  asrProvider, onAsrProviderChange
+  asrProvider, onAsrProviderChange, vadDurations, onVadDurationChange
 }, ref) => {
   const volumeBarRef = useRef<HTMLDivElement | null>(null)
 
@@ -111,6 +114,30 @@ export const SettingsPanel = forwardRef<SettingsPanelHandle, Props>(({
           <p className="settings-hint">
             建议值：0.02～0.08。将滑块拖到当前音量指示条的边缘即可。
           </p>
+
+          <label className="settings-label" style={{ marginTop: 20 }}>ASR 判停时长</label>
+          <p className="settings-desc">
+            连续静音达到该时长后结束当前句。修改后立即生效；阿里云和豆包会自动重连 ASR，以应用新参数。
+          </p>
+          {([
+            ['stepfun', 'Stepfun'],
+            ['aliyun', 'Paraformer'],
+            ['volc', '豆包ASR'],
+          ] as Array<[ConfigurableAsrProvider, string]>).map(([providerKey, label]) => (
+            <div className="threshold-row" key={providerKey}>
+              <span className="vad-provider-label">{label}</span>
+              <input
+                type="number"
+                min={200}
+                max={5000}
+                step={100}
+                value={vadDurations[providerKey]}
+                onChange={event => onVadDurationChange(providerKey, Number(event.target.value))}
+                className="vad-duration-input"
+              />
+              <span className="vad-duration-unit">ms</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>

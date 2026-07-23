@@ -11,7 +11,10 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
+import java.util.List;
 
 public class FanoAsrClient {
 
@@ -43,7 +46,10 @@ public class FanoAsrClient {
             config.put("languageCode", "yue-x-auto");
             config.put("audioChannelCount", 1);
             config.put("maxAlternatives", 1);
+            // 当前 FANO 接口仅接受 false；传 true 会返回 HTTP 400。
             config.put("enableAutomaticPunctuation", false);
+            // FANO 的批量结果可能按服务端完成顺序返回；词级时间戳用于恢复原始音频顺序。
+            config.put("enableWordTimeOffsets", true);
             config.put("enableSepareteRecognitionPerChannel", false);
             config.put("diarizationConfig", diarizationConfig);
 
@@ -99,15 +105,64 @@ public class FanoAsrClient {
             JSONArray results = resp.getJSONArray("results");
             if (results == null || results.isEmpty()) return null;
 
-            JSONArray alternatives = results.getJSONObject(0).getJSONArray("alternatives");
-            if (alternatives == null || alternatives.isEmpty()) return null;
-
-            String transcript = alternatives.getJSONObject(0).getString("transcript");
+            String transcript = mergeTranscriptSegments(results);
+            if (transcript.isEmpty()) return null;
             log.info("【FANO ASR】识别结果：{}", transcript);
             return transcript;
         } catch (Exception e) {
             log.error("【FANO ASR】识别异常", e);
             return null;
+        }
+    }
+
+    private String mergeTranscriptSegments(JSONArray results) {
+        List<TranscriptSegment> segments = new ArrayList<>();
+        for (int index = 0; index < results.size(); index++) {
+            JSONObject result = results.getJSONObject(index);
+            JSONArray alternatives = result == null ? null : result.getJSONArray("alternatives");
+            if (alternatives == null || alternatives.isEmpty()) continue;
+            JSONObject alternative = alternatives.getJSONObject(0);
+            String text = alternative == null ? null : alternative.getString("transcript");
+            if (text == null || text.trim().isEmpty()) continue;
+            segments.add(new TranscriptSegment(text.trim(), segmentStartSeconds(alternative, index), index));
+        }
+        segments.sort(Comparator
+                .comparingDouble((TranscriptSegment item) -> item.startSeconds)
+                .thenComparingInt(item -> item.responseIndex));
+
+        StringBuilder transcript = new StringBuilder();
+        String previous = null;
+        for (TranscriptSegment segment : segments) {
+            if (segment.text.equals(previous)) continue;
+            transcript.append(segment.text);
+            previous = segment.text;
+        }
+        return transcript.toString();
+    }
+
+    private double segmentStartSeconds(JSONObject alternative, int responseIndex) {
+        JSONArray words = alternative.getJSONArray("words");
+        if (words != null && !words.isEmpty()) {
+            String value = words.getJSONObject(0).getString("startTime");
+            if (value != null) {
+                try {
+                    return Double.parseDouble(value.replace("s", ""));
+                } catch (NumberFormatException ignored) { }
+            }
+        }
+        // 接口未提供时间戳时保持响应顺序，且排在已知时间戳分段之后。
+        return Double.MAX_VALUE - responseIndex;
+    }
+
+    private static class TranscriptSegment {
+        private final String text;
+        private final double startSeconds;
+        private final int responseIndex;
+
+        private TranscriptSegment(String text, double startSeconds, int responseIndex) {
+            this.text = text;
+            this.startSeconds = startSeconds;
+            this.responseIndex = responseIndex;
         }
     }
 

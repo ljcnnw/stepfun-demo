@@ -23,6 +23,7 @@ public class AliyunAsrClient extends WebSocketClient {
     private final String model;
     private final int sampleRate;
     private final String languageHints;
+    private final int maxSentenceSilenceMs;
     private StepfunWsClient.AsrEventListener listener;
 
     // 当前句子的 item_id（null 表示本句尚未开始）
@@ -37,6 +38,17 @@ public class AliyunAsrClient extends WebSocketClient {
             String model,
             int sampleRate,
             String languageHints) throws Exception {
+        this(wsUrl, apiKey, clientSession, model, sampleRate, languageHints, 1000);
+    }
+
+    public AliyunAsrClient(
+            String wsUrl,
+            String apiKey,
+            WebSocketSession clientSession,
+            String model,
+            int sampleRate,
+            String languageHints,
+            int maxSentenceSilenceMs) throws Exception {
         super(new URI(wsUrl));
         this.addHeader("Authorization", "Bearer " + apiKey);
         this.clientSession = clientSession;
@@ -44,6 +56,7 @@ public class AliyunAsrClient extends WebSocketClient {
         this.model = model == null || model.trim().isEmpty() ? "paraformer-realtime-v2" : model.trim();
         this.sampleRate = sampleRate <= 0 ? 16000 : sampleRate;
         this.languageHints = languageHints == null ? "" : languageHints.trim();
+        this.maxSentenceSilenceMs = maxSentenceSilenceMs;
     }
 
     public void setListener(StepfunWsClient.AsrEventListener listener) {
@@ -62,7 +75,7 @@ public class AliyunAsrClient extends WebSocketClient {
         JSONObject parameters = new JSONObject();
         parameters.put("format", "pcm");
         parameters.put("sample_rate", sampleRate);
-        parameters.put("max_sentence_silence", 1300);
+        parameters.put("max_sentence_silence", maxSentenceSilenceMs);
         List<String> hints = parseLanguageHints();
         if (!hints.isEmpty()) {
             parameters.put("language_hints", hints);

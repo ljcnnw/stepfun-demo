@@ -51,6 +51,7 @@ public class BenchCaseController {
             @RequestParam("durationSeconds") double durationSeconds,
             @RequestParam(value = "caseType", required = false) String caseType,
             @RequestParam(value = "referenceText", required = false) String referenceText,
+            @RequestParam(value = "cantoneseTraditionalReferenceText", required = false) String cantoneseTraditionalReferenceText,
             @RequestParam(value = "criticalTermsText", required = false) String criticalTermsText,
             @RequestParam(value = "acceptableTextsText", required = false) String acceptableTextsText,
             @RequestParam(value = "passRuleType", required = false) String passRuleType,
@@ -79,7 +80,7 @@ public class BenchCaseController {
         meta.put("hasAudio", hasAudio);
         meta.put("durationSeconds", durationSeconds);
         meta.put("createdAt", LocalDateTime.now().format(FMT));
-        applyOptionalFields(meta, caseType, referenceText, criticalTermsText, acceptableTextsText, passRuleType, passThreshold, enabled);
+        applyOptionalFields(meta, caseType, referenceText, cantoneseTraditionalReferenceText, criticalTermsText, acceptableTextsText, passRuleType, passThreshold, enabled);
 
         Files.write(dir.resolve("meta.json"), meta.toJSONString().getBytes(StandardCharsets.UTF_8));
         log.info("【BenchCase 保存】id={}, name={}, hasAudio={}", id, name, hasAudio);
@@ -217,6 +218,7 @@ public class BenchCaseController {
             JSONObject meta,
             String caseType,
             String referenceText,
+            String cantoneseTraditionalReferenceText,
             String criticalTermsText,
             String acceptableTextsText,
             String passRuleType,
@@ -224,6 +226,7 @@ public class BenchCaseController {
             Boolean enabled) {
         if (caseType != null) meta.put("caseType", caseType);
         if (referenceText != null) meta.put("referenceText", referenceText);
+        if (cantoneseTraditionalReferenceText != null) meta.put("cantoneseTraditionalReferenceText", cantoneseTraditionalReferenceText);
         if (criticalTermsText != null) meta.put("criticalTermsText", criticalTermsText);
         if (acceptableTextsText != null) meta.put("acceptableTextsText", acceptableTextsText);
         if (passRuleType != null) meta.put("passRuleType", passRuleType);
@@ -238,6 +241,7 @@ public class BenchCaseController {
         putIfPresent(meta, payload, "note");
         putIfPresent(meta, payload, "caseType");
         putIfPresent(meta, payload, "referenceText");
+        putIfPresent(meta, payload, "cantoneseTraditionalReferenceText");
         putIfPresent(meta, payload, "criticalTermsText");
         putIfPresent(meta, payload, "acceptableTextsText");
         putIfPresent(meta, payload, "passRuleType");

@@ -15,6 +15,7 @@ export interface TestCase {
   createdAt: string
   caseType?: string
   referenceText?: string
+  cantoneseTraditionalReferenceText?: string
   criticalTermsText?: string
   acceptableTextsText?: string
   passRuleType?: string
@@ -31,6 +32,7 @@ export interface CaseMetaUpdate {
   note?: string
   caseType?: string
   referenceText?: string
+  cantoneseTraditionalReferenceText?: string
   criticalTermsText?: string
   acceptableTextsText?: string
   passRuleType?: string
@@ -64,6 +66,7 @@ export async function saveCase(
   form.append('durationSeconds', String(durationSeconds))
   if (extra?.caseType) form.append('caseType', extra.caseType)
   if (extra?.referenceText !== undefined) form.append('referenceText', extra.referenceText)
+  if (extra?.cantoneseTraditionalReferenceText !== undefined) form.append('cantoneseTraditionalReferenceText', extra.cantoneseTraditionalReferenceText)
   if (extra?.criticalTermsText !== undefined) form.append('criticalTermsText', extra.criticalTermsText)
   if (extra?.acceptableTextsText !== undefined) form.append('acceptableTextsText', extra.acceptableTextsText)
   if (extra?.passRuleType) form.append('passRuleType', extra.passRuleType)

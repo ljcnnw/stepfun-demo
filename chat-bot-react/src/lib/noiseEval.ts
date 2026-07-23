@@ -43,6 +43,13 @@ function profileLabel(profile: string, type?: string, targetSnrDb?: number): str
     white_20: '白噪 20 dB',
     pink_10: '粉红噪 10 dB',
     babble_5: '背景人声 5 dB',
+    restaurant_10: '餐厅环境 10 dB',
+    traffic_10: '街道交通 10 dB',
+    subway_10: '地铁环境 10 dB',
+    office_15: '办公室环境 15 dB',
+    appliance_15: '家电低频 15 dB',
+    wind_10: '合成风噪 10 dB',
+    farfield_reverb: '远讲混响',
   }
   if (known[profile]) return known[profile]
   const typeLabel = type === 'babble' ? '背景人声' : type === 'pink' ? '粉红噪' : type === 'white' ? '白噪' : profile

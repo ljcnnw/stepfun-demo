@@ -12,6 +12,15 @@ import {
 import { getAudioDurationSeconds, mimeFromName } from '../lib/audioFrames'
 import { navigateWithAppBase } from '../lib/appRoutes'
 import { PressHoldRecorder } from '../components/eval/PressHoldRecorder'
+import {
+  CASE_LENGTH_OPTIONS,
+  NOISE_SCENARIO_OPTIONS,
+  getCaseLengthLabel,
+  getNoiseScenarioLabel,
+  matchesCaseFilters,
+  type CaseLengthFilter,
+  type NoiseScenarioFilter,
+} from '../lib/caseFilters'
 import './EvalPage.css'
 
 const CASES_PER_PAGE = 10
@@ -52,18 +61,24 @@ export function EvalCasesPage({ embedded = false, onChanged }: EvalCasesPageProp
   const [playingCaseId, setPlayingCaseId] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewPlaying, setPreviewPlaying] = useState(false)
+  const [caseLengthFilter, setCaseLengthFilter] = useState<CaseLengthFilter>('all')
+  const [noiseScenarioFilter, setNoiseScenarioFilter] = useState<NoiseScenarioFilter>('all')
   const previewAudioRef = useRef<HTMLAudioElement | null>(null)
   const previewObjectUrlRef = useRef<string | null>(null)
   const previewStartingRef = useRef(false)
 
   const activeCase = useMemo(() => cases.find(item => item.id === selectedCaseId) ?? null, [cases, selectedCaseId])
-  const totalPages = Math.max(1, Math.ceil(cases.length / CASES_PER_PAGE))
+  const filteredCases = useMemo(
+    () => cases.filter(item => matchesCaseFilters(item, caseLengthFilter, noiseScenarioFilter)),
+    [caseLengthFilter, cases, noiseScenarioFilter],
+  )
+  const totalPages = Math.max(1, Math.ceil(filteredCases.length / CASES_PER_PAGE))
   const visibleCases = useMemo(() => {
     const start = (currentPage - 1) * CASES_PER_PAGE
-    return cases.slice(start, start + CASES_PER_PAGE)
-  }, [cases, currentPage])
-  const pageStart = cases.length === 0 ? 0 : (currentPage - 1) * CASES_PER_PAGE + 1
-  const pageEnd = Math.min(currentPage * CASES_PER_PAGE, cases.length)
+    return filteredCases.slice(start, start + CASES_PER_PAGE)
+  }, [currentPage, filteredCases])
+  const pageStart = filteredCases.length === 0 ? 0 : (currentPage - 1) * CASES_PER_PAGE + 1
+  const pageEnd = Math.min(currentPage * CASES_PER_PAGE, filteredCases.length)
 
   const loadCases = useCallback(async () => {
     setLoading(true)
@@ -129,6 +144,7 @@ export function EvalCasesPage({ embedded = false, onChanged }: EvalCasesPageProp
       note: activeCase.note,
       caseType: activeCase.caseType,
       referenceText: activeCase.referenceText,
+      cantoneseTraditionalReferenceText: activeCase.cantoneseTraditionalReferenceText,
       criticalTermsText: activeCase.criticalTermsText,
       acceptableTextsText: activeCase.acceptableTextsText,
       passRuleType: activeCase.passRuleType,
@@ -314,12 +330,30 @@ export function EvalCasesPage({ embedded = false, onChanged }: EvalCasesPageProp
             </div>
           </div>
 
+          <div className="case-filter-bar" aria-label="Case 筛选">
+            <label>
+              <span>对话长短</span>
+              <select value={caseLengthFilter} onChange={(event) => { setCaseLengthFilter(event.target.value as CaseLengthFilter); setCurrentPage(1) }}>
+                {CASE_LENGTH_OPTIONS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>噪音场景</span>
+              <select value={noiseScenarioFilter} onChange={(event) => { setNoiseScenarioFilter(event.target.value as NoiseScenarioFilter); setCurrentPage(1) }}>
+                {NOISE_SCENARIO_OPTIONS.map(option => <option key={option.key} value={option.key}>{option.label}</option>)}
+              </select>
+            </label>
+            <span className="case-filter-count">匹配 {filteredCases.length} / {cases.length} 条</span>
+          </div>
+
           <div className="case-table-wrap">
             <table className="case-table">
               <thead>
                 <tr>
                   <th>名称</th>
                   <th>类型</th>
+                  <th>对话长短</th>
+                  <th>噪音场景</th>
                   <th>参考文本</th>
                   <th>关键实体</th>
                   <th>规则</th>
@@ -335,6 +369,8 @@ export function EvalCasesPage({ embedded = false, onChanged }: EvalCasesPageProp
                       <div className="case-note">{item.source}</div>
                     </td>
                     <td>{getCaseTypeLabel(item.caseType)}</td>
+                    <td>{getCaseLengthLabel(item)}</td>
+                    <td>{getNoiseScenarioLabel(item)}</td>
                     <td className="table-text">{item.referenceText || '待填写'}</td>
                     <td className="table-text">{item.criticalTermsText || '—'}</td>
                     <td>{getPassRuleLabel(item.passRuleType)} / {item.passThreshold.toFixed(2)}</td>
@@ -360,14 +396,14 @@ export function EvalCasesPage({ embedded = false, onChanged }: EvalCasesPageProp
           </div>
           <div className="case-pagination" aria-label="Case 列表分页">
             <div className="case-pagination-status">
-              {cases.length === 0 ? '暂无 Case' : `显示第 ${pageStart}-${pageEnd} 条，共 ${cases.length} 条`}
+              {filteredCases.length === 0 ? '当前筛选条件下暂无 Case' : `显示第 ${pageStart}-${pageEnd} 条，匹配 ${filteredCases.length} / ${cases.length} 条`}
             </div>
             <div className="case-pagination-actions">
               <button type="button" className="ghost-btn" onClick={() => setCurrentPage(1)} disabled={currentPage === 1}>首页</button>
               <button type="button" className="ghost-btn" onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} disabled={currentPage === 1}>上一页</button>
               <label className="case-page-select">
                 <span>第</span>
-                <select aria-label="选择 Case 页码" value={currentPage} onChange={(event) => setCurrentPage(Number(event.target.value))} disabled={cases.length === 0}>
+                <select aria-label="选择 Case 页码" value={currentPage} onChange={(event) => setCurrentPage(Number(event.target.value))} disabled={filteredCases.length === 0}>
                   {Array.from({ length: totalPages }, (_, index) => index + 1).map(page => <option key={page} value={page}>{page}</option>)}
                 </select>
                 <span>/ {totalPages} 页</span>
@@ -426,6 +462,10 @@ export function EvalCasesPage({ embedded = false, onChanged }: EvalCasesPageProp
                 <label>
                   <span>参考文本</span>
                   <textarea rows={5} value={activeCase.referenceText} onChange={(e) => upsertCase(activeCase.id, item => ({ ...item, referenceText: e.target.value }))} />
+                </label>
+                <label>
+                  <span>粤语繁体参考文本</span>
+                  <textarea rows={5} value={activeCase.cantoneseTraditionalReferenceText} onChange={(e) => upsertCase(activeCase.id, item => ({ ...item, cantoneseTraditionalReferenceText: e.target.value }))} placeholder="用于与主参考文本并行评分，自动采用较优结果" />
                 </label>
                 <label>
                   <span>关键实体</span>

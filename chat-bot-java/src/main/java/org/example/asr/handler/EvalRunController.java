@@ -70,7 +70,22 @@ public class EvalRunController {
 
     @PostMapping("/{runId}/resume")
     public ResponseEntity<JSONObject> resume(@PathVariable String runId) throws IOException {
-        return commandResponse(runId, runExecutor.resume(runId), "任务当前不可继续");
+        if (runExecutor.resume(runId)) return commandResponse(runId, true, "");
+        Path runPath = runPath(runId);
+        if (!Files.exists(runPath)) return ResponseEntity.notFound().build();
+        JSONObject run = readRun(runPath);
+        String status = run.getString("status");
+        boolean hasRetryableResult = hasRetryableResult(run);
+        if (!"failed".equals(status) && !"stopped".equals(status) && !("completed".equals(status) && hasRetryableResult)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error("任务当前不可继续"));
+        }
+        if (!hasRetryableResult) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error("任务中没有需要续跑的厂商项"));
+        }
+        if (!runExecutor.resumeIncomplete(run, this::writeRun)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error("已有评估任务正在运行"));
+        }
+        return ResponseEntity.ok(run);
     }
 
     @PostMapping("/{runId}/stop")
@@ -187,7 +202,10 @@ public class EvalRunController {
     }
 
     private JSONObject normalizeRunRecord(JSONObject payload, boolean createIfMissing) {
-        JSONObject run = payload == null ? new JSONObject() : JSONObject.parseObject(payload.toJSONString());
+        // 创建评估任务时 payload 会暂存所有 case 的 PCM Base64。不要通过 toJSONString()
+        // 深拷贝该对象，否则大规模抗噪集会在音频尚未消费前触发 fastjson 的 LargeObject 限制。
+        // prepareRun 会在转换完成后移除 audioPcmDataUrls，后续持久化的任务记录不含音频原始数据。
+        JSONObject run = payload == null ? new JSONObject() : payload;
         if (createIfMissing && run.getString("runId") == null) {
             run.put("runId", "run_" + UUID.randomUUID().toString());
         }
@@ -459,6 +477,20 @@ public class EvalRunController {
         JSONObject result = new JSONObject();
         result.put("message", message);
         return result;
+    }
+
+    private boolean hasRetryableResult(JSONObject run) {
+        JSONArray cases = run.getJSONArray("cases");
+        JSONArray vendors = run.getJSONArray("selectedVendors");
+        if (cases == null || vendors == null) return false;
+        for (int i = 0; i < cases.size(); i++) {
+            JSONObject results = cases.getJSONObject(i).getJSONObject("vendors");
+            for (int j = 0; j < vendors.size(); j++) {
+                JSONObject result = results == null ? null : results.getJSONObject(vendors.getString(j));
+                if (result == null || !"done".equals(result.getString("status"))) return true;
+            }
+        }
+        return false;
     }
 
     private JSONObject readRun(Path path) throws IOException {

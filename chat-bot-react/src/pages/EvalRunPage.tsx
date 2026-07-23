@@ -130,6 +130,7 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
   const [historyRuns, setHistoryRuns] = useState<EvalRunListItem[]>([])
   const [resultFilter, setResultFilter] = useState<'all' | 'failed' | 'unfinished' | 'passed'>('all')
   const [sortKey, setSortKey] = useState<'default' | 'name' | 'cer' | 'latency' | 'status'>('default')
+  const [noiseSortKey, setNoiseSortKey] = useState<'robustness' | 'vendor' | 'pairs' | 'retention' | 'cerDelta' | 'entityRetention'>('robustness')
 
   const activeCase = useMemo(() => run?.cases.find(item => item.id === selectedCaseId) ?? null, [run, selectedCaseId])
   const selectedVendorResult = useMemo(() => {
@@ -209,6 +210,22 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
     if (!run) return []
     return calculateNoiseVendorSummaries(run.cases, run.selectedVendors)
   }, [run])
+
+  const sortedNoiseComparison = useMemo(() => {
+    const nullLast = (value: number | null) => value === null ? Number.NEGATIVE_INFINITY : value
+    return [...noiseComparison].sort((a, b) => {
+      if (noiseSortKey === 'vendor') return getVendorLabel(a.vendor).localeCompare(getVendorLabel(b.vendor))
+      if (noiseSortKey === 'pairs') return b.validPairs - a.validPairs
+      if (noiseSortKey === 'retention') return nullLast(b.passRetention) - nullLast(a.passRetention)
+      if (noiseSortKey === 'cerDelta') {
+        const left = a.avgCerDelta === null ? Number.POSITIVE_INFINITY : a.avgCerDelta
+        const right = b.avgCerDelta === null ? Number.POSITIVE_INFINITY : b.avgCerDelta
+        return left - right
+      }
+      if (noiseSortKey === 'entityRetention') return nullLast(b.entityRetention) - nullLast(a.entityRetention)
+      return nullLast(b.robustnessScore) - nullLast(a.robustnessScore)
+    })
+  }, [noiseComparison, noiseSortKey])
 
   const noiseProfiles = noiseComparison[0]?.profiles ?? []
   const hasNoiseComparison = noiseComparison.some(summary => summary.validPairs > 0)
@@ -375,10 +392,10 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
 
   const selectedCase = activeCase
   const currentResult = selectedVendorResult
-  const refText = selectedCase?.referenceText || ''
+  const refText = currentResult?.referenceVariantUsed || selectedCase?.referenceText || ''
   const hypText = currentResult?.transcript || ''
-  const refDisplay = run.evaluationMode === 'strict' ? normalizeStrictText(refText) : normalizeLooseText(refText)
-  const hypDisplay = run.evaluationMode === 'strict' ? normalizeStrictText(hypText) : normalizeLooseText(hypText)
+  const refDisplay = (currentResult?.normalizedReference || (run.evaluationMode === 'strict' ? normalizeStrictText(refText) : normalizeLooseText(refText))).replace(/\s+/g, '')
+  const hypDisplay = (currentResult?.normalizedTranscript || (run.evaluationMode === 'strict' ? normalizeStrictText(hypText) : normalizeLooseText(hypText))).replace(/\s+/g, '')
   const diffSegments = diffText(refDisplay, hypDisplay)
 
   return (
@@ -483,7 +500,17 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
               <h2>抗噪能力</h2>
               <p>仅比较同一源 case 的干净基线与噪声副本；不纳入 WER、时延或综合分。</p>
             </div>
-            <div className="panel-actions"><span className="pill">抗噪指数：70% 通过保持 + 30% CER 稳定度</span></div>
+            <div className="panel-actions">
+              <span className="pill">抗噪指数：70% 通过保持 + 30% CER 稳定度</span>
+              <select value={noiseSortKey} onChange={(event) => setNoiseSortKey(event.target.value as typeof noiseSortKey)}>
+                <option value="robustness">按抗噪指数</option>
+                <option value="retention">按通过保持</option>
+                <option value="cerDelta">按 CER 增量</option>
+                <option value="entityRetention">按实体保持</option>
+                <option value="pairs">按有效配对</option>
+                <option value="vendor">按厂商名称</option>
+              </select>
+            </div>
           </div>
           <div className="result-table-wrap">
             <table className="result-table">
@@ -499,7 +526,7 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
                 </tr>
               </thead>
               <tbody>
-                {noiseComparison.map(summary => (
+                {sortedNoiseComparison.map(summary => (
                   <tr key={summary.vendor}>
                     <td>{getVendorLabel(summary.vendor)}</td>
                     <td>{summary.validPairs}</td>
@@ -575,7 +602,7 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
               <thead>
               <tr>
                 <th>Case</th>
-                <th>参考文本</th>
+                <th>音频</th>
                 <th>状态</th>
                 <th>最佳</th>
                 {run.selectedVendors.map(vendor => <th key={vendor}>{getVendorLabel(vendor)}</th>)}
@@ -585,13 +612,27 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
               <tbody>
                 {visibleCases.map(item => {
                   const bestResult = bestCaseResultMap.get(item.id) ?? null
+                  const playable = Boolean(item.audioDataUrl || item.backendId)
                   return (
                     <tr key={item.id} className={selectedCaseId === item.id ? 'selected' : ''} onClick={() => setSelectedCaseId(item.id)}>
                       <td>
                         <div className="case-name">{item.name}</div>
                         <div className="case-note">{item.caseType}</div>
                       </td>
-                      <td className="table-text ref-cell">{item.referenceText || '待填写'}</td>
+                      <td className="matrix-audio-cell" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="matrix-audio-btn"
+                          disabled={!playable}
+                          title={playable ? '播放 case 音频' : '该历史 case 没有可重放的音频'}
+                          onClick={() => {
+                            setSelectedCaseId(item.id)
+                            void openPreview(item)
+                          }}
+                        >
+                          ▶ 播放
+                        </button>
+                      </td>
                       <td>
                         <span className="badge">
                           {run.selectedVendors[0] ? CASE_PHASE_LABELS[item.vendors[run.selectedVendors[0]]?.phase ?? 'queued'] : '—'}
@@ -662,15 +703,15 @@ export function EvalRunPage({ runId, embedded = false }: EvalRunPageProps) {
                   <button type="button" className="ghost-btn" onClick={() => setSelectedVendor(run.selectedVendors[0] ?? null)}>默认厂商</button>
                 </div>
                 <div className="audio-upload">
-                  <div className="audio-title">参考文本</div>
-                  <div className="detail-text">{selectedCase.referenceText || '未填写'}</div>
+                  <div className="audio-title">采用的参考文本</div>
+                  <div className="detail-text">{currentResult.referenceVariantUsed || selectedCase.referenceText || '未填写'}</div>
                 </div>
                 <div className="audio-upload">
                   <div className="audio-title">识别结果</div>
                   <div className="detail-text">{currentResult.transcript || '空结果'}</div>
                 </div>
                 <div className="audio-upload">
-                  <div className="audio-title">差异高亮</div>
+                  <div className="audio-title">归一化字符差异</div>
                   <div className="diff-row">
                     {diffSegments.map((segment, idx) => (
                       <span key={idx} className={`diff-segment diff-${segment.type}`}>{segment.text}</span>

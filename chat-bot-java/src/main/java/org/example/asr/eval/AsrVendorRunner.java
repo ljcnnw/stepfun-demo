@@ -1,6 +1,7 @@
 package org.example.asr.eval;
 
 import org.example.asr.client.AliyunAsrClient;
+import org.example.asr.client.FanoAsrClient;
 import org.example.asr.client.StepfunWsClient;
 import org.example.asr.client.VolcAsrClient;
 import org.java_websocket.client.WebSocketClient;
@@ -17,7 +18,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 @Component
 public class AsrVendorRunner {
@@ -30,6 +32,8 @@ public class AsrVendorRunner {
 
     @Value("${stepfun.api.key}") private String stepfunApiKey;
     @Value("${stepfun.asr.url}") private String stepfunAsrUrl;
+    @Value("${fano.asr.url}") private String fanoAsrUrl;
+    @Value("${fano.asr.token}") private String fanoAsrToken;
     @Value("${aliyun.asr.url}") private String aliyunAsrUrl;
     @Value("${aliyun.asr.api-key}") private String aliyunAsrApiKey;
     @Value("${aliyun.asr.model:paraformer-realtime-v2}") private String aliyunAsrModel;
@@ -51,14 +55,26 @@ public class AsrVendorRunner {
     @Value("${volc.asr.request.result-type}") private String volcResultType;
     @Value("${asr.eval.vendor-timeout-ms:180000}") private long vendorTimeoutMs;
 
-    private final AtomicReference<WebSocketClient> activeClient = new AtomicReference<>();
-    private final AtomicReference<CompletableFuture<String>> activeTranscript = new AtomicReference<>();
+    private final ConcurrentMap<String, WebSocketClient> activeClients = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, CompletableFuture<String>> activeTranscripts = new ConcurrentHashMap<>();
 
     public VendorOutcome run(String vendor, byte[] pcm, Cancellation cancellation) throws Exception {
         long startedAt = System.currentTimeMillis();
+        if ("fano".equals(vendor)) {
+            checkCancelled(cancellation);
+            String transcript = new FanoAsrClient(fanoAsrUrl, fanoAsrToken).recognize(pcm);
+            checkCancelled(cancellation);
+            if (transcript == null || transcript.trim().isEmpty()) {
+                throw new IllegalStateException("FANO 未返回识别文本");
+            }
+            long finalLatency = System.currentTimeMillis() - startedAt;
+            // FANO 为同步批量接口，不存在可独立统计的流式首包时间。
+            return new VendorOutcome(transcript.trim(), null, finalLatency);
+        }
         AtomicLong firstLatency = new AtomicLong(-1);
         CompletableFuture<String> terminalSignal = new CompletableFuture<>();
-        activeTranscript.set(terminalSignal);
+        String executionId = vendor + "_" + System.nanoTime();
+        activeTranscripts.put(executionId, terminalSignal);
         NoopWebSocketSession session = new NoopWebSocketSession("eval_" + System.nanoTime());
         Object transcriptLock = new Object();
         List<String> transcriptSegments = new ArrayList<>();
@@ -105,7 +121,7 @@ public class AsrVendorRunner {
             @Override public void onAsrError(String message) { terminalSignal.completeExceptionally(new IllegalStateException(message)); }
         };
         WebSocketClient client = createClient(vendor, session, listener);
-        activeClient.set(client);
+        activeClients.put(executionId, client);
         try {
             client.connect();
             long connectionDeadline = System.currentTimeMillis() + 15000;
@@ -148,22 +164,21 @@ public class AsrVendorRunner {
                     vendor, value, firstLatency.get() < 0 ? null : firstLatency.get(), finalLatency);
             return new VendorOutcome(value, firstLatency.get() < 0 ? null : firstLatency.get(), finalLatency);
         } finally {
-            activeTranscript.compareAndSet(terminalSignal, null);
-            if (activeClient.compareAndSet(client, null)) client.close();
+            activeTranscripts.remove(executionId, terminalSignal);
+            if (activeClients.remove(executionId, client)) client.close();
         }
     }
 
     public void cancelCurrent() {
-        CompletableFuture<String> transcript = activeTranscript.getAndSet(null);
-        if (transcript != null) transcript.completeExceptionally(new InterruptedException("任务已停止"));
-        WebSocketClient client = activeClient.getAndSet(null);
-        if (client != null) client.close();
+        activeTranscripts.forEach((id, transcript) -> transcript.completeExceptionally(new InterruptedException("任务已停止")));
+        activeClients.forEach((id, client) -> client.close());
     }
 
     private WebSocketClient createClient(String vendor, NoopWebSocketSession session, StepfunWsClient.AsrEventListener listener) throws Exception {
         if ("stepfun".equals(vendor)) {
             StepfunWsClient client = new StepfunWsClient(new URI(stepfunAsrUrl), stepfunApiKey, session);
             client.setListener(listener);
+            client.setDeliverAllCompletedEvents(true);
             return client;
         }
         if ("aliyun".equals(vendor)) {
