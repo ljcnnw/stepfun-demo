@@ -79,11 +79,8 @@ public class BenchWebSocketHandler extends AbstractWebSocketHandler {
     @Value("${volc.asr.url}")
     private String volcAsrUrl;
 
-    @Value("${volc.asr.app-key}")
-    private String volcAsrAppKey;
-
-    @Value("${volc.asr.access-key}")
-    private String volcAsrAccessKey;
+    @Value("${volc.asr.api-key:}")
+    private String volcAsrApiKey;
 
     @Value("${volc.asr.resource-id}")
     private String volcAsrResourceId;
@@ -117,6 +114,9 @@ public class BenchWebSocketHandler extends AbstractWebSocketHandler {
 
     @Value("${volc.asr.request.result-type}")
     private String volcResultType;
+
+    @Value("${volc.asr.request.boosting-table-id:}")
+    private String volcBoostingTableId;
 
     // FANO ASR
     @Value("${fano.asr.url}")
@@ -300,9 +300,10 @@ public class BenchWebSocketHandler extends AbstractWebSocketHandler {
 
             case "volc":
                 VolcAsrClient volc = new VolcAsrClient(
-                        volcAsrUrl, volcAsrAppKey, volcAsrAccessKey, volcAsrResourceId, session,
+                        volcAsrUrl, volcAsrApiKey, volcAsrResourceId, session,
                         volcModelName, volcEnableItn, volcEnablePunc, volcEnableDdc, volcEnableNonstream,
-                        volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType);
+                        volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType,
+                        volcEndWindowSize, volcBoostingTableId);
                 volc.setListener(buildStreamingListener(session, state, "volc"));
                 volc.connect();
                 state.volcClient = volc;

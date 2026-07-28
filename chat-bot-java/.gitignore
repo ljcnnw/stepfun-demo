@@ -36,3 +36,6 @@ build/
 
 ### Mac OS ###
 .DS_Store
+/asr-test-cases/
+/asr-eval-runs/
+/asr-test-cases/

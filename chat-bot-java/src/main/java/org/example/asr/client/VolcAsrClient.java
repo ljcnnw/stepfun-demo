@@ -64,6 +64,7 @@ public class VolcAsrClient extends WebSocketClient {
     private final String outputZhVariant;
     private final boolean enableLid;
     private final String resultType;
+    private final String boostingTableId;
 
     // 每句已发给前端的文本长度，用于计算 delta
     private String lastSentText = "";
@@ -73,24 +74,37 @@ public class VolcAsrClient extends WebSocketClient {
     private final Object sendLock = new Object();
     private final CountDownLatch fullRequestSent = new CountDownLatch(1);
 
-    public VolcAsrClient(String wsUrl, String appKey, String accessKey, String resourceId,
+    public VolcAsrClient(String wsUrl, String apiKey, String resourceId,
                          WebSocketSession clientSession,
                          String modelName, boolean enableItn, boolean enablePunc,
                          boolean enableDdc, boolean enableNonstream,
                          int endWindowSize, int forceToSpeechTime,
                          String outputZhVariant, boolean enableLid, String resultType) throws Exception {
-        this(wsUrl, appKey, accessKey, resourceId, clientSession,
+        this(wsUrl, apiKey, resourceId, clientSession,
                 modelName, enableItn, enablePunc, enableDdc, enableNonstream,
-                endWindowSize, forceToSpeechTime, outputZhVariant, enableLid, resultType, endWindowSize);
+                endWindowSize, forceToSpeechTime, outputZhVariant, enableLid, resultType, endWindowSize, "");
     }
 
-    public VolcAsrClient(String wsUrl, String appKey, String accessKey, String resourceId,
+    public VolcAsrClient(String wsUrl, String apiKey, String resourceId,
                          WebSocketSession clientSession,
                          String modelName, boolean enableItn, boolean enablePunc,
                          boolean enableDdc, boolean enableNonstream,
                          int configuredEndWindowSize, int forceToSpeechTime,
                          String outputZhVariant, boolean enableLid, String resultType,
                          int vadEndWindowSize) throws Exception {
+        this(wsUrl, apiKey, resourceId, clientSession,
+                modelName, enableItn, enablePunc, enableDdc, enableNonstream,
+                configuredEndWindowSize, forceToSpeechTime, outputZhVariant, enableLid, resultType,
+                vadEndWindowSize, "");
+    }
+
+    public VolcAsrClient(String wsUrl, String apiKey, String resourceId,
+                         WebSocketSession clientSession,
+                         String modelName, boolean enableItn, boolean enablePunc,
+                         boolean enableDdc, boolean enableNonstream,
+                         int configuredEndWindowSize, int forceToSpeechTime,
+                         String outputZhVariant, boolean enableLid, String resultType,
+                         int vadEndWindowSize, String boostingTableId) throws Exception {
         super(new URI(wsUrl));
         this.clientSession = clientSession;
         this.taskId = UUID.randomUUID().toString().replace("-", "");
@@ -104,10 +118,13 @@ public class VolcAsrClient extends WebSocketClient {
         this.outputZhVariant = outputZhVariant;
         this.enableLid = enableLid;
         this.resultType = resultType;
+        this.boostingTableId = boostingTableId == null ? "" : boostingTableId.trim();
 
-        // 鉴权：新版控制台使用 X-Api-Key；若使用旧版控制台，改为 X-Api-App-Key + X-Api-Access-Key
-        this.addHeader("X-Api-App-Key", appKey);
-        this.addHeader("X-Api-Access-Key", accessKey);
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            throw new IllegalArgumentException("缺少 volc.asr.api-key（请设置环境变量 VOLC_ASR_API_KEY）");
+        }
+        // 新版火山控制台鉴权：只发送 X-Api-Key，不再携带旧版 App ID / Access Token 请求头。
+        this.addHeader("X-Api-Key", apiKey.trim());
         this.addHeader("X-Api-Resource-Id", resourceId);
         this.addHeader("X-Api-Request-Id", this.taskId);
         // 固定值 -1（文档要求）
@@ -162,6 +179,11 @@ public class VolcAsrClient extends WebSocketClient {
         }
         if (enableLid) {
             request.put("enable_lid", true);
+        }
+        if (!boostingTableId.isEmpty()) {
+            JSONObject corpus = new JSONObject();
+            corpus.put("boosting_table_id", boostingTableId);
+            request.put("corpus", corpus);
         }
 
         JSONObject body = new JSONObject();

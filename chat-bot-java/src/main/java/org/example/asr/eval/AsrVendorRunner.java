@@ -40,8 +40,7 @@ public class AsrVendorRunner {
     @Value("${aliyun.asr.sample-rate:16000}") private int aliyunAsrSampleRate;
     @Value("${aliyun.asr.language-hints:}") private String aliyunAsrLanguageHints;
     @Value("${volc.asr.url}") private String volcAsrUrl;
-    @Value("${volc.asr.app-key}") private String volcAsrAppKey;
-    @Value("${volc.asr.access-key}") private String volcAsrAccessKey;
+    @Value("${volc.asr.api-key:}") private String volcAsrApiKey;
     @Value("${volc.asr.resource-id}") private String volcAsrResourceId;
     @Value("${volc.asr.request.model-name}") private String volcModelName;
     @Value("${volc.asr.request.enable-itn}") private boolean volcEnableItn;
@@ -53,6 +52,7 @@ public class AsrVendorRunner {
     @Value("${volc.asr.request.output-zh-variant:}") private String volcOutputZhVariant;
     @Value("${volc.asr.request.enable-lid}") private boolean volcEnableLid;
     @Value("${volc.asr.request.result-type}") private String volcResultType;
+    @Value("${volc.asr.request.boosting-table-id:}") private String volcBoostingTableId;
     @Value("${asr.eval.vendor-timeout-ms:180000}") private long vendorTimeoutMs;
 
     private final ConcurrentMap<String, WebSocketClient> activeClients = new ConcurrentHashMap<>();
@@ -193,9 +193,10 @@ public class AsrVendorRunner {
             return client;
         }
         if ("volc".equals(vendor)) {
-            VolcAsrClient client = new VolcAsrClient(volcAsrUrl, volcAsrAppKey, volcAsrAccessKey, volcAsrResourceId, session,
+            VolcAsrClient client = new VolcAsrClient(volcAsrUrl, volcAsrApiKey, volcAsrResourceId, session,
                     volcModelName, volcEnableItn, volcEnablePunc, volcEnableDdc, volcEnableNonstream,
-                    volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType);
+                    volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType,
+                    volcEndWindowSize, volcBoostingTableId);
             client.setListener(listener);
             return client;
         }

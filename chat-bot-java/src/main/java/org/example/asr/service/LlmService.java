@@ -172,6 +172,7 @@ public class LlmService {
             StringBuilder sentenceBuffer = new StringBuilder();
             String newState = null;
             boolean conversationEnded = false;
+            boolean currentMessageHasContent = false;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
@@ -203,16 +204,28 @@ public class LlmService {
                             safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.delta"); put("text", td); }});
                             sentenceBuffer.append(text);
                             enqueueIfSentence(sentenceBuffer, sentenceQueue, sessionId);
+                            currentMessageHasContent = true;
                         }
-                        if (Boolean.TRUE.equals(msg.getBoolean("isEndOfMessage"))) break;
+                        // Sierra 可能在同一响应流中连续返回多条 message。isEndOfMessage
+                        // 仅表示当前消息结束，不能终止读取；向前端发送边界事件，让下一条
+                        // message 新建气泡，并将本条尚未按标点切分的文本交给 TTS。
+                        if (Boolean.TRUE.equals(msg.getBoolean("isEndOfMessage"))) {
+                            if (currentMessageHasContent) {
+                                enqueueRemainingText(sentenceBuffer, sentenceQueue);
+                                safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
+                                currentMessageHasContent = false;
+                                log.info("【Sierra 消息完成】继续读取后续消息，sessionId={}", sessionId);
+                            }
+                        }
                     }
                 }
             }
 
-            String remaining = sentenceBuffer.toString().trim();
-            if (!remaining.isEmpty() && !cancelled.get()) sentenceQueue.put(remaining);
-
-            safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
+            // 兼容服务端未发送 isEndOfMessage、但直接关闭响应流的情况。
+            if (currentMessageHasContent && !cancelled.get()) {
+                enqueueRemainingText(sentenceBuffer, sentenceQueue);
+                safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
+            }
             log.info("【Sierra 推理完成】耗时 {} ms，sessionId={}", System.currentTimeMillis() - startMs, sessionId);
 
             if (conversationEnded) {
@@ -374,9 +387,18 @@ public class LlmService {
         }
     }
 
+    /** 将一条 Sierra message 在边界处剩余的文本交给 TTS，避免与下一条 message 合并。 */
+    private void enqueueRemainingText(StringBuilder buffer, LinkedBlockingQueue<String> queue) throws InterruptedException {
+        String remaining = buffer.toString().trim();
+        buffer.setLength(0);
+        if (!remaining.isEmpty()) {
+            queue.put(remaining);
+        }
+    }
+
     public void playGreeting(String sessionId, WebSocketSession clientSession,
                               Consumer<TtsWebSocketClient> onTtsClient) {
-        String greeting = "您好，欢迎使用股票交易助手。请告诉我您想买入哪只股票，我来为您完成下单流程。";
+        String greeting = "您好，欢迎使用股票交易助手。请告诉我您想买入股票还是卖出股票。";
         safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.delta"); put("text", greeting); }});
         safeSend(clientSession, new JSONObject() {{ put("type", "llm.text.done"); }});
         executor.submit(() -> {

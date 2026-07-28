@@ -73,11 +73,8 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     @Value("${volc.asr.url}")
     private String volcAsrUrl;
 
-    @Value("${volc.asr.app-key}")
-    private String volcAsrAppKey;
-
-    @Value("${volc.asr.access-key}")
-    private String volcAsrAccessKey;
+    @Value("${volc.asr.api-key:}")
+    private String volcAsrApiKey;
 
     @Value("${volc.asr.resource-id}")
     private String volcAsrResourceId;
@@ -111,6 +108,9 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
     @Value("${volc.asr.request.result-type}")
     private String volcResultType;
+
+    @Value("${volc.asr.request.boosting-table-id:}")
+    private String volcBoostingTableId;
 
     @Autowired
     private LlmService llmService;
@@ -201,10 +201,10 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
     private void connectVolcAsr(WebSocketSession session) throws Exception {
         VolcAsrClient asr = new VolcAsrClient(
-                volcAsrUrl, volcAsrAppKey, volcAsrAccessKey, volcAsrResourceId, session,
+                volcAsrUrl, volcAsrApiKey, volcAsrResourceId, session,
                 volcModelName, volcEnableItn, volcEnablePunc, volcEnableDdc, volcEnableNonstream,
                 volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType,
-                getVadDuration(volcVadSilenceMs, session.getId()));
+                getVadDuration(volcVadSilenceMs, session.getId()), volcBoostingTableId);
         asr.setListener(buildListener(session));
         asr.connect();
         volcAsrClients.put(session.getId(), asr);

@@ -25,6 +25,14 @@ import java.util.concurrent.atomic.AtomicLong;
 public class StepfunWsClient extends WebSocketClient {
 
     private static final Logger log = LoggerFactory.getLogger(StepfunWsClient.class);
+    /**
+     * Stepfun 流式 ASR 通过 prompt 注入领域热词，没有单独的 hotwords/weight 字段。
+     * 此词表与证券交易通话场景保持一致，包含粤语读法、股票代码读法及交易流程用语。
+     */
+    private static final String SECURITIES_HOTWORD_PROMPT = ""
+            + "这是香港证券交易客服场景。优先准确识别粤语、股票代码、证券名称、买入、卖出、沽货、股数、价格、港元等术语；保留用户原意。"
+            + "热词包括：我要买股票、我要卖股票、买股票、卖股票、买入、卖出、查询购买力、查询持仓、查询报价、查询订单、查看订单、撤单、改单、修改订单、继续下单、结束、转人工、证券账户、股票交易权限、交易留痕、录音、同意、不同意、对、不对、是、不是、继续、确认提交、修改、验证码、短信验证码、一次性验证码、指纹验证、人脸验证、PU、HKIDR、香港投资者识别制度、港股、非港股、香港交易所、股票名称、股票代码、订单类型、市价单、限价单、继续市价单、改限价单、当日有效、撤销前有效、有效期、购买力、持仓、报价、可卖数量、可买数量、交易时间、竞价单、价格提醒、腾讯、腾讯控股、0700、腾讯 0700、腾讯零七零零、零七零零、港币、HKD、100股、200股、100、200、320港币、321港币、320、321、订单号、A123456、S654321、已受理、可用资金不足、可卖数量不足、交易受限、继续下一笔。"
+            + "如果用户说的是普通话，最后输出简体中文；如果用户说的是粤语，最后输出香港繁体。";
 
     private final WebSocketSession clientSession;
     private final AtomicLong eventCounter = new AtomicLong(0);
@@ -296,7 +304,7 @@ public class StepfunWsClient extends WebSocketClient {
         JSONObject transcription = new JSONObject();
         transcription.put("model", "stepaudio-2.5-asr-stream");
         transcription.put("language", "zh");
-        transcription.put("prompt", "这是香港证券交易客服场景。优先准确识别粤语、股票代码、证券名称、买入、卖出、沽货、股数、价格、港元等术语；保留用户原意。如果用户说的是普通话，最后输出简体中文。如果用户说的是粤语，最后输出的是香港繁体。");
+        transcription.put("prompt", SECURITIES_HOTWORD_PROMPT);
         transcription.put("full_rerun_on_commit", true);
         transcription.put("enable_itn", true);
 
