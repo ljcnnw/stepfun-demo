@@ -225,6 +225,11 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         payload.get(pcmBytes);
 
         String provider = asrProviderMap.getOrDefault(session.getId(), "stepfun");
+        if (!ensureAsrClientReady(session, provider)) {
+            log.warn("[ASR 音频丢弃] ASR 子连接未就绪·sessionId={}, provider={}", session.getId(), provider);
+            return;
+        }
+
         if ("fano".equals(provider)) {
             handleFanoAudioFrame(session, pcmBytes);
         } else if ("aliyun".equals(provider)) {
@@ -236,6 +241,45 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         } else {
             StepfunWsClient asr = asrClients.get(session.getId());
             if (asr != null) asr.sendAudioFrame(pcmBytes);
+        }
+    }
+
+    private boolean ensureAsrClientReady(WebSocketSession session, String provider) {
+        String sessionId = session.getId();
+        try {
+            if ("fano".equals(provider)) {
+                return true;
+            }
+
+            if ("aliyun".equals(provider)) {
+                AliyunAsrClient asr = aliyunAsrClients.get(sessionId);
+                if (asr != null && asr.isOpen()) return true;
+                reconnectAliyunAsr(session);
+                asr = aliyunAsrClients.get(sessionId);
+                return asr != null && asr.isOpen();
+            }
+
+            if ("volc".equals(provider)) {
+                VolcAsrClient asr = volcAsrClients.get(sessionId);
+                if (asr != null && asr.isOpen()) return true;
+                reconnectVolcAsr(session);
+                asr = volcAsrClients.get(sessionId);
+                return asr != null && asr.isOpen();
+            }
+
+            StepfunWsClient asr = asrClients.get(sessionId);
+            if (asr != null && asr.isOpen()) return true;
+
+            StepfunWsClient old = asrClients.remove(sessionId);
+            if (old != null && !old.isClosed()) {
+                old.close();
+            }
+            connectStepfunAsr(session);
+            asr = asrClients.get(sessionId);
+            return asr != null && asr.isOpen();
+        } catch (Exception e) {
+            log.error("[ASR 自愈重连失败] sessionId={}, provider={}", sessionId, provider, e);
+            return false;
         }
     }
 
