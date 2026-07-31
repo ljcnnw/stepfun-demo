@@ -396,6 +396,35 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                 return;
             }
 
+            if ("conversation.item.input_text.submit".equals(type)) {
+                String rawText = json.getString("text");
+                String transcript = rawText == null ? "" : rawText.trim();
+                if (transcript.isEmpty()) {
+                    log.warn("[文本提交忽略] text 为空，sessionId={}", session.getId());
+                    return;
+                }
+
+                AtomicBoolean playing = isPlaying.get(session.getId());
+                if (playing != null && playing.get()) {
+                    log.info("[文本提交] 检测到正在播放，先执行打断，sessionId={}", session.getId());
+                    interruptAll(session);
+                }
+
+                String itemId = json.getString("item_id");
+                if (session.isOpen()) {
+                    JSONObject ack = new JSONObject();
+                    ack.put("type", "conversation.item.input_text.completed");
+                    ack.put("item_id", (itemId == null || itemId.trim().isEmpty()) ? ("txt_" + System.currentTimeMillis()) : itemId);
+                    ack.put("transcript", transcript);
+                    synchronized (session) {
+                        session.sendMessage(new TextMessage(ack.toJSONString()));
+                    }
+                }
+
+                triggerLlm(session, transcript);
+                return;
+            }
+
             // 其他消息透传给 Stepfun ASR
             StepfunWsClient asr = asrClients.get(session.getId());
             if (asr != null && asr.isOpen()) {
