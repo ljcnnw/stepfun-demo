@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
@@ -42,6 +43,7 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     private static final int DEFAULT_VENDOR_VAD_SILENCE_MS = 1000;
     private static final int MIN_VENDOR_VAD_SILENCE_MS = 200;
     private static final int MAX_VENDOR_VAD_SILENCE_MS = 5000;
+    private static final long ASR_CONNECT_TIMEOUT_MS = 5000;
 
     @Value("${stepfun.api.key}")
     private String apiKey;
@@ -128,6 +130,8 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     private final Map<String, Integer> stepfunVadSilenceMs = new ConcurrentHashMap<>();
     private final Map<String, Integer> aliyunVadSilenceMs = new ConcurrentHashMap<>();
     private final Map<String, Integer> volcVadSilenceMs = new ConcurrentHashMap<>();
+    // 每个前端会话独立加锁，避免多个音频包同时触发 ASR 重连并互相覆盖客户端。
+    private final Map<String, Object> asrConnectionLocks = new ConcurrentHashMap<>();
 
     // FANO 本地 VAD 状态
     private final Map<String, List<byte[]>> fanoAudioBuffer = new ConcurrentHashMap<>();
@@ -179,9 +183,12 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         StepfunWsClient asr = new StepfunWsClient(new URI(asrUrl), apiKey, session);
         asr.setVadSilenceDurationMs(getVadDuration(stepfunVadSilenceMs, session.getId()));
         asr.setListener(buildListener(session));
-        asr.connect();
+        if (!asr.connectBlocking(ASR_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS) || !asr.isOpen()) {
+            asr.close();
+            throw new IllegalStateException("Stepfun ASR 连接未在超时时间内建立");
+        }
         asrClients.put(session.getId(), asr);
-        log.info("【ASR 连接】已向 Stepfun ASR 发起连接，sessionId={}", session.getId());
+        log.info("【ASR 连接】Stepfun ASR 已就绪，sessionId={}", session.getId());
     }
 
     private void connectAliyunAsr(WebSocketSession session) throws Exception {
@@ -194,9 +201,12 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                 aliyunAsrLanguageHints,
                 getVadDuration(aliyunVadSilenceMs, session.getId()));
         asr.setListener(buildListener(session));
-        asr.connect();
+        if (!asr.connectBlocking(ASR_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS) || !asr.isOpen()) {
+            asr.close();
+            throw new IllegalStateException("阿里云 ASR 连接未在超时时间内建立");
+        }
         aliyunAsrClients.put(session.getId(), asr);
-        log.info("【ASR 连接】已向阿里云 ASR 发起连接，sessionId={}", session.getId());
+        log.info("【ASR 连接】阿里云 ASR 已就绪，sessionId={}", session.getId());
     }
 
     private void connectVolcAsr(WebSocketSession session) throws Exception {
@@ -206,9 +216,12 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
                 volcEndWindowSize, volcForceToSpeechTime, volcOutputZhVariant, volcEnableLid, volcResultType,
                 getVadDuration(volcVadSilenceMs, session.getId()), volcBoostingTableId);
         asr.setListener(buildListener(session));
-        asr.connect();
+        if (!asr.connectBlocking(ASR_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS) || !asr.isReady()) {
+            asr.close();
+            throw new IllegalStateException("火山引擎 ASR 连接未在超时时间内建立");
+        }
         volcAsrClients.put(session.getId(), asr);
-        log.info("【ASR 连接】已向火山引擎 ASR 发起连接，sessionId={}", session.getId());
+        log.info("【ASR 连接】火山引擎 ASR 已就绪，sessionId={}", session.getId());
     }
 
     private void initFanoVadState(String sessionId) {
@@ -246,40 +259,42 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
     private boolean ensureAsrClientReady(WebSocketSession session, String provider) {
         String sessionId = session.getId();
-        try {
-            if ("fano".equals(provider)) {
-                return true;
-            }
+        synchronized (asrConnectionLocks.computeIfAbsent(sessionId, key -> new Object())) {
+            try {
+                if ("fano".equals(provider)) {
+                    return true;
+                }
 
-            if ("aliyun".equals(provider)) {
-                AliyunAsrClient asr = aliyunAsrClients.get(sessionId);
+                if ("aliyun".equals(provider)) {
+                    AliyunAsrClient asr = aliyunAsrClients.get(sessionId);
+                    if (asr != null && asr.isOpen()) return true;
+                    reconnectAliyunAsr(session);
+                    asr = aliyunAsrClients.get(sessionId);
+                    return asr != null && asr.isOpen();
+                }
+
+                if ("volc".equals(provider)) {
+                    VolcAsrClient asr = volcAsrClients.get(sessionId);
+                    if (asr != null && asr.isReady()) return true;
+                    reconnectVolcAsr(session);
+                    asr = volcAsrClients.get(sessionId);
+                    return asr != null && asr.isReady();
+                }
+
+                StepfunWsClient asr = asrClients.get(sessionId);
                 if (asr != null && asr.isOpen()) return true;
-                reconnectAliyunAsr(session);
-                asr = aliyunAsrClients.get(sessionId);
+
+                StepfunWsClient old = asrClients.remove(sessionId);
+                if (old != null && !old.isClosed()) {
+                    old.close();
+                }
+                connectStepfunAsr(session);
+                asr = asrClients.get(sessionId);
                 return asr != null && asr.isOpen();
+            } catch (Exception e) {
+                log.error("[ASR 自愈重连失败] sessionId={}, provider={}", sessionId, provider, e);
+                return false;
             }
-
-            if ("volc".equals(provider)) {
-                VolcAsrClient asr = volcAsrClients.get(sessionId);
-                if (asr != null && asr.isOpen()) return true;
-                reconnectVolcAsr(session);
-                asr = volcAsrClients.get(sessionId);
-                return asr != null && asr.isOpen();
-            }
-
-            StepfunWsClient asr = asrClients.get(sessionId);
-            if (asr != null && asr.isOpen()) return true;
-
-            StepfunWsClient old = asrClients.remove(sessionId);
-            if (old != null && !old.isClosed()) {
-                old.close();
-            }
-            connectStepfunAsr(session);
-            asr = asrClients.get(sessionId);
-            return asr != null && asr.isOpen();
-        } catch (Exception e) {
-            log.error("[ASR 自愈重连失败] sessionId={}, provider={}", sessionId, provider, e);
-            return false;
         }
     }
 
@@ -548,6 +563,7 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         fanoSilenceFrames.remove(sessionId);
         fanoSpeechFrames.remove(sessionId);
         fanoSpeaking.remove(sessionId);
+        asrConnectionLocks.remove(sessionId);
 
         StepfunWsClient asr = asrClients.remove(sessionId);
         if (asr != null && !asr.isClosed()) asr.close();
@@ -564,28 +580,34 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     }
 
     private void reconnectAliyunAsr(WebSocketSession session) {
-        AliyunAsrClient old = aliyunAsrClients.remove(session.getId());
-        if (old != null && !old.isClosed()) {
-            old.sendFinishTask();
-            old.close();
-        }
-        try {
-            connectAliyunAsr(session);
-        } catch (Exception e) {
-            log.error("【阿里云 ASR】建立连接失败，sessionId={}", session.getId(), e);
+        String sessionId = session.getId();
+        synchronized (asrConnectionLocks.computeIfAbsent(sessionId, key -> new Object())) {
+            AliyunAsrClient old = aliyunAsrClients.remove(sessionId);
+            if (old != null && !old.isClosed()) {
+                old.sendFinishTask();
+                old.close();
+            }
+            try {
+                connectAliyunAsr(session);
+            } catch (Exception e) {
+                log.error("【阿里云 ASR】建立连接失败，sessionId={}", sessionId, e);
+            }
         }
     }
 
     private void reconnectVolcAsr(WebSocketSession session) {
-        VolcAsrClient old = volcAsrClients.remove(session.getId());
-        if (old != null && !old.isClosed()) {
-            old.sendFinishFrame();
-            old.close();
-        }
-        try {
-            connectVolcAsr(session);
-        } catch (Exception e) {
-            log.error("【火山引擎 ASR】建立连接失败，sessionId={}", session.getId(), e);
+        String sessionId = session.getId();
+        synchronized (asrConnectionLocks.computeIfAbsent(sessionId, key -> new Object())) {
+            VolcAsrClient old = volcAsrClients.remove(sessionId);
+            if (old != null && !old.isClosed()) {
+                old.sendFinishFrame();
+                old.close();
+            }
+            try {
+                connectVolcAsr(session);
+            } catch (Exception e) {
+                log.error("【火山引擎 ASR】建立连接失败，sessionId={}", sessionId, e);
+            }
         }
     }
 

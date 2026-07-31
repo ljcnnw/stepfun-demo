@@ -73,6 +73,8 @@ public class VolcAsrClient extends WebSocketClient {
 
     private final Object sendLock = new Object();
     private final CountDownLatch fullRequestSent = new CountDownLatch(1);
+    // WebSocket 仍可能保持 open，但豆包已通过错误帧结束 ASR 会话；该状态用于区分两者。
+    private volatile boolean serviceReady;
 
     public VolcAsrClient(String wsUrl, String apiKey, String resourceId,
                          WebSocketSession clientSession,
@@ -138,11 +140,13 @@ public class VolcAsrClient extends WebSocketClient {
     @Override
     public void onOpen(ServerHandshake handshake) {
         log.info("【火山引擎 ASR 连接建立】sessionId={}，taskId={}", clientSession.getId(), taskId);
+        serviceReady = false;
         try {
             byte[] frame = buildFullClientRequest();
             synchronized (sendLock) {
                 send(ByteBuffer.wrap(frame));
             }
+            serviceReady = true;
             log.info("【火山引擎 ASR】已发送 full client request，taskId={}", taskId);
         } catch (Exception e) {
             log.error("【火山引擎 ASR】发送 full client request 失败，sessionId={}", clientSession.getId(), e);
@@ -210,7 +214,7 @@ public class VolcAsrClient extends WebSocketClient {
      * 格式：4字节header + 4字节payload_size(大端) + PCM字节
      */
     public void sendAudioFrame(byte[] pcm16k) {
-        if (!isOpen()) return;
+        if (!isReady()) return;
         // header: [0x11, 0x20, 0x00, 0x00]
         ByteBuffer buf = ByteBuffer.allocate(4 + 4 + pcm16k.length);
         buf.order(ByteOrder.BIG_ENDIAN);
@@ -231,7 +235,7 @@ public class VolcAsrClient extends WebSocketClient {
      * 格式：4字节header + 4字节payload_size(0)
      */
     public void sendFinishFrame() {
-        if (!isOpen()) return;
+        if (!isReady()) return;
         // header: [0x11, 0x22, 0x00, 0x00]，flags=0b0010表示最后一包
         ByteBuffer buf = ByteBuffer.allocate(4 + 4);
         buf.order(ByteOrder.BIG_ENDIAN);
@@ -298,6 +302,10 @@ public class VolcAsrClient extends WebSocketClient {
                                 JSONObject errObj = JSONObject.parseObject(errJson);
                                 log.error("【火山引擎 ASR 服务端错误 JSON】{}，sessionId={}", errObj.toJSONString(), clientSession.getId());
                             } catch (Exception ignored) {}
+                            // 错误帧表示服务端会话已经失效，即使底层 WebSocket 尚未收到 close，
+                            // 也必须让上层下一包音频触发重连。
+                            serviceReady = false;
+                            close();
                         } catch (Exception ex) {
                             // Gzip 解压失败，打印十六进制原始数据
                             StringBuilder hex = new StringBuilder();
@@ -439,12 +447,19 @@ public class VolcAsrClient extends WebSocketClient {
 
     @Override
     public void onClose(int code, String reason, boolean remote) {
+        serviceReady = false;
         log.info("【火山引擎 ASR 连接关闭】code={}，reason={}，sessionId={}", code, reason, clientSession.getId());
     }
 
     @Override
     public void onError(Exception ex) {
+        serviceReady = false;
         log.error("【火山引擎 ASR 连接错误】sessionId={}", clientSession.getId(), ex);
+    }
+
+    /** 底层 WebSocket 打开且豆包 ASR 会话仍有效。 */
+    public boolean isReady() {
+        return serviceReady && isOpen();
     }
 
     private void sendToClient(String json) {
