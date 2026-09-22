@@ -27,17 +27,19 @@ public class TtsWebSocketClient extends WebSocketClient {
     private final WebSocketSession clientSession;
     private final String voiceId;
     private final String text;
+    private final String instruction;
     // TTS 服务分配的会话 ID，后续发送文本时需要带上
     private String ttsSessionId;
     // 播放完成回调，由 LlmService 的串行队列设置，触发后允许播放下一句
     private Runnable onDone;
 
     public TtsWebSocketClient(URI uri, String apiKey, String voiceId, String text,
-                               WebSocketSession clientSession) {
+                               WebSocketSession clientSession, String instruction) {
         super(uri, buildHeaders(apiKey));
         this.voiceId = voiceId;
         this.text = text;
         this.clientSession = clientSession;
+        this.instruction = instruction == null ? "" : instruction.trim();
     }
 
     public void setOnDone(Runnable onDone) {
@@ -171,11 +173,19 @@ public class TtsWebSocketClient extends WebSocketClient {
         data.put("response_format", "pcm");
         data.put("sample_rate", 16000);
         data.put("mode", "sentence");
+        if (!instruction.isEmpty() && isStepAudio25Model()) {
+            data.put("instruction", instruction);
+        }
 
         JSONObject msg = new JSONObject();
         msg.put("type", "tts.create");
         msg.put("data", data);
         send(msg.toJSONString());
+    }
+
+    private boolean isStepAudio25Model() {
+        String query = getURI().getQuery();
+        return query != null && query.contains("model=stepaudio-2.5-tts");
     }
 
     /**

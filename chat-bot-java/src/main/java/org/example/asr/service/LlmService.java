@@ -67,6 +67,9 @@ public class LlmService {
     @Value("${stepfun.tts.voice}")
     private String ttsVoice;
 
+    @Value("${stepfun.tts.instruction:}")
+    private String ttsInstruction;
+
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
     // per-session provider，默认 sierra
@@ -112,7 +115,7 @@ public class LlmService {
                     log.info("【TTS 开始播放】sentence={}，sessionId={}", sentence, sessionId);
                     CountDownLatch latch = new CountDownLatch(1);
                     TtsWebSocketClient tts = new TtsWebSocketClient(
-                            new URI(ttsUrl), apiKey, ttsVoice, sentence, clientSession);
+                            new URI(ttsUrl), apiKey, ttsVoice, sentence, clientSession, ttsInstruction);
                     tts.setOnDone(latch::countDown);
                     onTtsClient.accept(tts);
                     tts.connect();
@@ -405,7 +408,7 @@ public class LlmService {
             try {
                 CountDownLatch latch = new CountDownLatch(1);
                 TtsWebSocketClient tts = new TtsWebSocketClient(
-                        new URI(ttsUrl), apiKey, ttsVoice, greeting, clientSession);
+                        new URI(ttsUrl), apiKey, ttsVoice, greeting, clientSession, ttsInstruction);
                 tts.setOnDone(latch::countDown);
                 onTtsClient.accept(tts);
                 tts.connect();
